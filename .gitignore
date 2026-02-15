@@ -1,0 +1,22 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Google Drive temp files
+.tmp.drivedownload/
+.tmp.driveupload/
+
+# Claude Code
+.claude/
+
+# VBA binary files (if accidentally created)
+*.frx
+
+# Outlook data files
+*.pst
+*.ost
+
+# Environment/secrets
+.env
+*.key
