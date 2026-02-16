@@ -4,6 +4,7 @@ A VBA-based email filtering system for Microsoft Outlook that automatically clas
 
 ## What's New in v2.0
 
+- **Automated Installation**: One-click PowerShell installer or VBA self-installer
 - **External Configuration**: All settings in `settings.ini` — no more editing VBA code
 - **Readable Folder Names**: Configurable folder names (e.g., "Protected" instead of "II")
 - **LLM Email Tools**: Summarize emails and draft replies using Azure OpenAI
@@ -24,6 +25,22 @@ A VBA-based email filtering system for Microsoft Outlook that automatically clas
 
 ## Quick Start
 
+### Automated Installation (Recommended) ⚡
+
+**Option 1: PowerShell Installer** (easiest)
+```powershell
+.\Install-OutlookFilter.ps1
+```
+Or double-click `install.bat` in Windows Explorer.
+
+**Option 2: VBA Self-Installer**
+1. Import `src/Installer.bas` into Outlook VBA (Alt+F11 -> File -> Import)
+2. Run `InstallEmailFilter` in the Immediate Window (Ctrl+G)
+
+See [INSTALL-QUICK.md](INSTALL-QUICK.md) for details.
+
+### Manual Installation
+
 1. **Enable macros** in Outlook (File -> Options -> Trust Center -> Macro Settings)
 2. **Import VBA modules** (Alt+F11 -> File -> Import): Config.bas, Utilities.bas, EmailFilter.bas, BatchFilter.bas
 3. **Paste ThisOutlookSession** code into the built-in module (see [docs/INSTALL.md](docs/INSTALL.md))
@@ -32,7 +49,7 @@ A VBA-based email filtering system for Microsoft Outlook that automatically clas
 6. **Create learning folders** under Inbox: LearnKeep, LearnDelete, LearnSubjectDelete
 7. **Test**: In Immediate Window (Ctrl+G), type `FilterExistingDryRun`
 
-See [docs/INSTALL.md](docs/INSTALL.md) for detailed instructions, or [docs/USER_MANUAL.md](docs/USER_MANUAL.md) for the complete reference.
+See [docs/INSTALL.md](docs/INSTALL.md) for detailed manual instructions, or [docs/USER_MANUAL.md](docs/USER_MANUAL.md) for the complete reference.
 
 **Upgrading from v1.x?** Run `DetectAndMigrateOldFolders` to rename I/II/III/IIII/V to readable names.
 
