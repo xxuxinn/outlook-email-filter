@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Outlook Email Agent</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <h1>Outlook Email Agent</h1>
+  <span id="status-badge" class="status-badge">connecting...</span>
+  <span id="version-info"></span>
+</header>
+
+<nav class="tabs">
+  <button data-tab="settings" class="active">Settings</button>
+  <button data-tab="macros">Macros</button>
+  <button data-tab="rules">Learned Rules</button>
+  <button data-tab="chat">Chat</button>
+  <button data-tab="logs">Logs</button>
+</nav>
+
+<main>
+
+  <!-- ===== SETTINGS TAB ===== -->
+  <div class="tab-panel active" id="tab-settings">
+    <div class="panel-content">
+      <div class="flex-row" style="margin-bottom:16px">
+        <button class="btn success" onclick="loadSettings()">↺ Refresh</button>
+        <button class="btn" onclick="reloadSettings()">⟳ Send Reload to Outlook</button>
+        <span class="text-dim">Changes to settings.ini take effect after reload.</span>
+      </div>
+      <div id="settings-sections">
+        <div class="text-dim">Loading settings...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== MACROS TAB ===== -->
+  <div class="tab-panel" id="tab-macros">
+    <div class="panel-content">
+      <div class="card">
+        <h3>Run Macro</h3>
+        <p class="text-dim" style="margin-bottom:12px">
+          Commands are sent to Outlook via the file bridge.
+          Outlook must be running with the command poller active (auto-started on Application_Startup).
+        </p>
+        <div class="macro-grid" id="macro-grid"></div>
+      </div>
+      <div class="card">
+        <h3>Output</h3>
+        <div class="output-panel" id="macro-output">Click a macro above to run it...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== LEARNED RULES TAB ===== -->
+  <div class="tab-panel" id="tab-rules">
+    <div class="panel-content">
+      <div class="flex-row" style="margin-bottom:16px">
+        <button class="btn success" onclick="loadLearnedRules()">↺ Refresh</button>
+      </div>
+
+      <div class="card">
+        <h3>Sender Rules</h3>
+        <table>
+          <thead><tr><th>Email</th><th>Action</th><th>Timestamp</th></tr></thead>
+          <tbody id="senders-table-body"><tr><td colspan="3" class="text-dim">Loading...</td></tr></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3>Subject Rules</h3>
+        <table>
+          <thead><tr><th>Subject Substring</th><th>Action</th><th>Timestamp</th></tr></thead>
+          <tbody id="subjects-table-body"><tr><td colspan="3" class="text-dim">Loading...</td></tr></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3>Reply Examples (few-shot)</h3>
+        <table>
+          <thead><tr><th>Subject</th><th>From</th><th>Reply Snippet</th><th>Timestamp</th></tr></thead>
+          <tbody id="replies-table-body"><tr><td colspan="4" class="text-dim">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== CHAT TAB ===== -->
+  <div class="tab-panel" id="tab-chat">
+    <div class="chat-container">
+      <div class="chat-messages" id="chat-messages"></div>
+      <div class="chat-input-row">
+        <input type="text" id="chat-input" placeholder='Type a command, e.g. "dry run", "show version", "help"...'>
+        <button class="btn primary" onclick="sendChat()">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== LOGS TAB ===== -->
+  <div class="tab-panel" id="tab-logs">
+    <div class="panel-content">
+      <div class="flex-row" style="margin-bottom:16px">
+        <button class="btn success" onclick="loadLogs()">↺ Refresh</button>
+        <span class="text-dim">Showing last 200 lines (most recent first)</span>
+      </div>
+      <div class="card">
+        <div class="flex-row" style="margin-bottom:8px">
+          <h3 style="margin:0">Error Log</h3>
+          <button class="btn sm" onclick="clearErrorLog()">Clear</button>
+        </div>
+        <div id="logs-container">
+          <div class="text-dim">Loading...</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="flex-row" style="margin-bottom:8px">
+          <h3 style="margin:0">LLM Debug Log</h3>
+          <button class="btn sm" onclick="clearLLMDebugLog()">Clear</button>
+        </div>
+        <p class="text-dim" style="margin-bottom:8px">Requires LogLevel=DEBUG in settings. Shows full LLM request/response JSON.</p>
+        <div id="llm-debug-container">
+          <div class="text-dim">Loading...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

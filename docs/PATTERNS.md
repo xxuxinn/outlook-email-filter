@@ -1,370 +1,293 @@
-# Email Filter Patterns Guide
+# Pattern Configuration Guide — Outlook Email Agent v3.0
 
-This document explains how to customize the email classification patterns in `Config.bas`.
+This document explains how to configure the email classification patterns in `settings.ini`.
+
+> **v3.0 note**: All patterns are now configured in `settings.ini` under `[Patterns]`, not in `Config.bas`. Edit with any text editor — changes take effect immediately, no Outlook restart needed.
+
+---
+
+## How Patterns Work
+
+All patterns are **comma-separated strings** stored as values in `settings.ini`:
+
+```ini
+[Patterns]
+NamePatterns=Xu Xin,XuXin,Prof Xu,Professor Xu
+DeleteSubjectPatterns=offer,digest,newsletter,unsubscribe
+```
+
+Matching is **case-insensitive substring** for all patterns — "news" matches "newsletter", "breaking news", "newsroom". There are no exact-match or regex patterns.
+
+---
 
 ## Pattern Types
 
-### 1. Protected Domains (`PROTECTED_DOMAINS`)
+### 1. Protected Domains (`ProtectedDomains`)
 
-Emails from these domains are **NEVER deleted**. They're moved to the "II" folder for later reading.
+Emails from these domains are **NEVER deleted**. They are moved to the Protected folder for later reading.
 
-```vba
-Public Const PROTECTED_DOMAINS As String = "substack.com,reddit.com,redditmail.com"
+```ini
+ProtectedDomains=substack.com,reddit.com,redditmail.com
 ```
 
-**Use for:**
-- Newsletter services you subscribe to
-- Sites with valuable content you want to keep
-- Domains with important notifications
+**How it works**: Extracts domain from sender's email address. Checks if the domain contains any pattern in the list. Because it's a substring match, `substack.com` matches `mail.substack.com` too.
 
-**How it works:**
-- Extracts domain from sender's email address
-- Checks if domain contains any pattern in the list
-- Case-insensitive matching
+**Use for**: Newsletters you subscribe to, sites with valuable content, domains that send important notifications.
 
-**Examples:**
 | Sender Email | Domain | Matches? |
 |--------------|--------|----------|
 | `newsletter@substack.com` | `substack.com` | ✅ Yes |
 | `no-reply@mail.substack.com` | `mail.substack.com` | ✅ Yes (contains "substack.com") |
-| `info@reddit.com` | `reddit.com` | ✅ Yes |
+| `info@company.com` | `company.com` | ❌ No |
 
 ---
 
-### 2. Delete Sender Patterns (`DELETE_SENDER_PATTERNS`)
+### 2. Name Patterns (`NamePatterns`)
 
-If the sender's **email address** contains any of these, the email is deleted.
+If your **name** appears in the subject line or email body (first 200 chars), the email is kept.
 
-```vba
-Public Const DELETE_SENDER_PATTERNS As String = "notice,noreply,notification,no-reply,marketing,promo,newsletter,digest,campaign,bulk,mailer,broadcast"
+```ini
+NamePatterns=Xu Xin,XuXin,Xuxin,Xin Xu,Professor Xu,Prof. Xu,Prof Xu,Dr. Xu,Dr Xu
 ```
 
-**Use for:**
-- Generic notification addresses
-- Marketing/promotional senders
-- Automated system messages
+**Include:**
+- Full name variations (Chinese order and Western order)
+- Title + last name (Prof. Xu, Dr. Xu)
+- Title + first name (Prof. Xin)
+- Common misspellings or abbreviations
 
-**Examples:**
+> **Tip**: Use `GenerateAddressingPatterns` macro to let the LLM generate a comprehensive list from your name automatically.
+
+---
+
+### 3. Greeting Patterns (`GreetingPatterns`)
+
+If the email **body starts with** any of these greetings, it is kept.
+
+```ini
+GreetingPatterns=Dear Professor Xu,Dear Prof. Xu,Dear Prof Xu,Dear Dr. Xu,Dear Dr Xu,Dear Xin,Hi Xin,Hello Xin,Dear Head,Dear Director
+```
+
+**Tips:**
+- Include both formal and informal greetings
+- Add position-based greetings (Director, Head, Chair) if applicable
+- Whitespace at the start of the email body is trimmed automatically
+
+---
+
+### 4. Organizational Tags (`PolyUTags`)
+
+Emails with these **tags in the subject** are kept.
+
+```ini
+PolyUTags=[MM],[HRO],[CUS],ToXX
+```
+
+Matching is case-insensitive (same as all other patterns). Use for department/institution tags that identify internally-routed important emails.
+
+---
+
+### 5. VIP Keywords (`VIPSubjectKeywords`)
+
+If the **subject** contains any of these keywords, the email is kept.
+
+```ini
+VIPSubjectKeywords=thesis,dissertation,supervision,urgent,deadline,review request,paper submission,grant,conference,publication,meeting request,appointment,interview
+```
+
+**Academic examples to consider**: thesis, dissertation, defense, publication, manuscript, revision, grant, proposal, deadline, conference, review request, referee, editor
+
+---
+
+### 6. Delete Sender Patterns (`DeleteSenderPatterns`)
+
+If the sender's **email address** contains any of these patterns, the email is deleted.
+
+```ini
+DeleteSenderPatterns=notice,noreply,no-reply,notification,marketing,promo,newsletter,digest,campaign,bulk,mailer,broadcast
+```
+
+**Use for**: Generic notification addresses, marketing senders, automated system messages.
+
 | Sender Email | Matches Pattern | Action |
 |--------------|-----------------|--------|
 | `noreply@company.com` | `noreply` | DELETE |
 | `marketing@brand.com` | `marketing` | DELETE |
 | `john.smith@company.com` | (none) | Continue to next rule |
 
+> **Warning**: Avoid overly broad patterns. `info` would delete emails from `info@anycompany.com`, which is likely not what you want.
+
 ---
 
-### 3. Delete Known Senders (`DELETE_KNOWN_SENDERS`)
+### 7. Delete Known Senders (`DeleteKnownSenders`)
 
 If the sender's **display name** contains any of these, the email is deleted.
 
-```vba
-Public Const DELETE_KNOWN_SENDERS As String = "LinkedIn Job Alerts,edX,Cathay Pacific,HKBN,MyLink,WIRED Daily,Coursera,Udemy,Medium Daily Digest"
+```ini
+DeleteKnownSenders=LinkedIn Job Alerts,edX,Cathay Pacific,HKBN,Medium Daily Digest
 ```
 
-**Use for:**
-- Specific services you don't want emails from
-- Bulk senders with recognizable names
-- Company names that send spam
-
-**Tips:**
-- Use exact names as they appear in your inbox
-- Can be partial matches (e.g., "LinkedIn" matches "LinkedIn Job Alerts")
+**Use for**: Specific services you don't want emails from, bulk senders with recognizable display names.
 
 ---
 
-### 4. Delete Subject Patterns (`DELETE_SUBJECT_PATTERNS`)
+### 8. Delete Subject Patterns (`DeleteSubjectPatterns`)
 
-If the email **subject** contains any of these keywords, it's deleted.
+If the email **subject** contains any of these keywords, it is deleted.
 
-```vba
-Public Const DELETE_SUBJECT_PATTERNS As String = "優惠,offer,digest,newsletter,unsubscribe,job alert,weekly roundup,daily digest,promotional,special offer,limited time,act now,don't miss"
+```ini
+DeleteSubjectPatterns=優惠,offer,digest,newsletter,unsubscribe,job alert,weekly roundup,daily digest,promotional,special offer,limited time
 ```
 
-**Use for:**
-- Promotional keywords
-- Digest/roundup emails
-- Spam trigger words
-
-**Supports:**
-- Multiple languages (e.g., Chinese "優惠" = "discount/offer")
-- Case-insensitive matching
-
----
-
-### 5. Name Patterns (`NAME_PATTERNS`)
-
-If your **name** appears in the subject or email body, the email is kept.
-
-```vba
-Public Const NAME_PATTERNS As String = "Xu Xin,XuXin,Xuxin,Xin Xu,Professor Xu,Prof. Xu,Prof Xu,Dr. Xu,Dr Xu,Mr. Xu,Mr Xu"
-```
-
-**Include:**
-- Full name variations
-- Title + name combinations
-- Common misspellings
-
-**How it's used:**
-1. Checks if subject contains any pattern
-2. Checks if body's first 200 characters contain any pattern
-3. If found → KEEP the email
-
----
-
-### 6. Greeting Patterns (`GREETING_PATTERNS`)
-
-If the email **body starts with** any of these greetings, it's kept.
-
-```vba
-Public Const GREETING_PATTERNS As String = "Dear Professor Xu,Dear Prof. Xu,Dear Prof Xu,Dear Dr. Xu,Dear Dr Xu,Dear Xin,Hi Xin,Hello Xin,Dear Head,Dear Director"
-```
-
-**Tips:**
-- Include formal and informal greetings
-- Add position-based greetings (Director, Head, Chair)
-- Whitespace at start of email is trimmed automatically
-
----
-
-### 7. Organizational Tags (`POLYU_TAGS`)
-
-Emails with these **tags in the subject** are kept (institutional importance).
-
-```vba
-Public Const POLYU_TAGS As String = "[MM],[HRO],[CUS],ToXX"
-```
-
-**Common formats:**
-- `[DEPT]` - Department codes
-- `[URGENT]` - Priority tags
-- Custom institutional prefixes
-
----
-
-### 8. VIP Keywords (`VIP_SUBJECT_KEYWORDS`)
-
-If the **subject** contains any of these keywords, the email is kept.
-
-```vba
-Public Const VIP_SUBJECT_KEYWORDS As String = "thesis,dissertation,supervision,urgent,deadline,review request,paper submission,grant,conference,publication,meeting request,appointment,interview"
-```
-
-**Categories to consider:**
-- Academic: thesis, dissertation, publication, grant
-- Professional: deadline, interview, appointment
-- Communication: meeting request, urgent, important
+**Supports multi-language**: Chinese characters work (e.g., "優惠" = discount/offer).
 
 ---
 
 ## Classification Priority
 
-The filter checks patterns in this order (first match wins):
+Patterns are checked in this order. **First match wins.**
 
-0. **Learned Sender Rule** → KEEP or DELETE (self-improving, highest priority)
-1. **Protected Domain** → Move to "II" folder
-2. **Personally Addressed** → KEEP
-3. **Organizational Tags** → KEEP
-4. **VIP Subject Keywords** → KEEP
-5. **Reply Chain (RE:)** → KEEP
-6. **Forward Chain (FW:)** → KEEP
-7. **Known Spam Senders** → DELETE
-8. **Sender Email Patterns** → DELETE
-9. **Subject Patterns** → DELETE
-10. **No Match** → LLM_REVIEW (or "I" folder)
-
----
-
-## Pattern Syntax
-
-### Comma-Separated Lists
-
-All patterns are comma-separated strings:
-
-```vba
-' Correct
-Public Const PATTERNS As String = "pattern1,pattern2,pattern3"
-
-' Also correct (with spaces after commas - they're trimmed)
-Public Const PATTERNS As String = "pattern1, pattern2, pattern3"
-
-' INCORRECT - don't use newlines
-Public Const PATTERNS As String = "pattern1," & _
-    "pattern2"  ' This won't work correctly
-```
-
-### Case Sensitivity
-
-- Most patterns are **case-insensitive** (e.g., "NEWSLETTER" matches "newsletter")
-- `POLYU_TAGS` is checked with case sensitivity for exact tag matching
-
-### Partial Matching
-
-Most patterns use **partial matching** (contains):
-- Pattern "news" matches "newsletter", "breaking news", "newsroom"
-- Pattern "promo" matches "promotional", "promo code", "company-promo"
+| Priority | Rule | Patterns Used |
+|----------|------|---------------|
+| 0 | Learned sender | `learned_senders.txt` (drag to LearnKeep/LearnDelete) |
+| 0.5 | Learned subject | `learned_subjects.txt` (drag to LearnSubjectDelete) |
+| 1 | Protected domain | `ProtectedDomains` |
+| 2 | Personally addressed | `NamePatterns`, `GreetingPatterns` |
+| 3 | Organizational tags | `PolyUTags` |
+| 4 | VIP keywords | `VIPSubjectKeywords` |
+| 5 | Reply chain | Built-in (RE:, AW:) |
+| 6 | Forward chain | Built-in (FW:, FWD:, WG:) |
+| 7 | Known spam senders | `DeleteKnownSenders` |
+| 8 | Spam sender email | `DeleteSenderPatterns` |
+| 9 | Spam subject | `DeleteSubjectPatterns` |
+| 10 | No match | Review folder (or LLM if enabled) |
 
 ---
 
-## Adding New Patterns
+## Editing Patterns
 
-### To add a protected domain:
+Open `%APPDATA%\OutlookEmailFilter\settings.ini` in any text editor:
 
-```vba
-' Before
-Public Const PROTECTED_DOMAINS As String = "substack.com,reddit.com"
+```ini
+[Patterns]
+; Before
+ProtectedDomains=substack.com,reddit.com
 
-' After
-Public Const PROTECTED_DOMAINS As String = "substack.com,reddit.com,newsite.com"
+; After — add new domains
+ProtectedDomains=substack.com,reddit.com,arxiv.org,nature.com
 ```
 
-### To add a delete pattern:
-
-```vba
-' Before
-Public Const DELETE_SUBJECT_PATTERNS As String = "offer,digest"
-
-' After
-Public Const DELETE_SUBJECT_PATTERNS As String = "offer,digest,flash sale,clearance"
-```
+Save the file. Changes take effect immediately — no restart needed.
 
 ---
 
-## Testing Your Patterns
+## Testing Patterns
 
-After editing patterns:
+After editing:
 
-1. **Save** the Config module (Ctrl+S)
-2. Run `FilterExistingDryRun` to preview
-3. Check the Immediate Window (Ctrl+G) for results
-4. Look for unexpected classifications
-5. Adjust patterns as needed
-6. Repeat until satisfied
+1. Open VBA Editor (Alt+F11) → Immediate Window (Ctrl+G)
+2. Run `FilterExistingDryRun` to preview results
+3. Check Immediate Window for unexpected classifications
+4. Adjust and repeat
 
-### Check Specific Pattern Matching
-
-In the Immediate Window, you can test patterns:
+To test a specific pattern match interactively:
 
 ```vba
-? ContainsAny("john@noreply.company.com", DELETE_SENDER_PATTERNS)
+? ContainsAny("john@noreply.company.com", "noreply,no-reply,donotreply")
 ' Returns: True
 
-? ContainsAny("important-meeting@company.com", DELETE_SENDER_PATTERNS)
-' Returns: False
-
-? IsProtectedDomain("substack.com")
+? ContainsAny("Dear Professor Xu, I hope", "Dear Professor Xu,Dear Prof")
 ' Returns: True
 ```
 
 ---
 
-## Common Pattern Mistakes
+## Common Mistakes
 
-### ❌ Too Broad
+### Too broad — will delete legitimate emails
 
-```vba
-' This will delete legitimate emails from "company-info@..."
-Public Const DELETE_SENDER_PATTERNS As String = "info"
+```ini
+; BAD: "info" matches info@hospital.com, info@university.edu
+DeleteSenderPatterns=info
 ```
 
-### ✅ More Specific
-
-```vba
-' Better - targets automated addresses
-Public Const DELETE_SENDER_PATTERNS As String = "noreply,no-reply,donotreply"
+```ini
+; BETTER: target automated addresses
+DeleteSenderPatterns=noreply,no-reply,donotreply
 ```
 
----
+### Missing variations — won't catch all addressing forms
 
-### ❌ Missing Variations
-
-```vba
-' Won't catch "Dr Xu" (no period)
-Public Const NAME_PATTERNS As String = "Dr. Xu"
+```ini
+; BAD: won't catch "Dr Xu" (no period)
+NamePatterns=Dr. Xu
 ```
 
-### ✅ Include Variations
-
-```vba
-' Catches both with and without period
-Public Const NAME_PATTERNS As String = "Dr. Xu,Dr Xu"
+```ini
+; GOOD: include both with and without period
+NamePatterns=Dr. Xu,Dr Xu,Prof. Xu,Prof Xu,Professor Xu
 ```
 
----
+### Greeting too short — will over-match
 
-## Example: Academic Configuration
+```ini
+; BAD: "Dear" alone matches any email starting with "Dear"
+GreetingPatterns=Dear
+```
 
-```vba
-' For a university professor
-Public Const PROTECTED_DOMAINS As String = "arxiv.org,researchgate.net,academia.edu,springer.com,ieee.org,acm.org"
-
-Public Const NAME_PATTERNS As String = "Prof. Smith,Professor Smith,Dr. Smith,John Smith,J. Smith"
-
-Public Const GREETING_PATTERNS As String = "Dear Professor Smith,Dear Prof. Smith,Dear Dr. Smith,Dear John,Hi John,Hello Professor"
-
-Public Const VIP_SUBJECT_KEYWORDS As String = "thesis,dissertation,defense,publication,manuscript,revision,grant,NSF,NIH,proposal,deadline,conference,ICML,NeurIPS,review request,referee,editor"
-
-Public Const DELETE_KNOWN_SENDERS As String = "Beall's List,Predatory Journals,OMICS,MDPI"
-
-Public Const DELETE_SUBJECT_PATTERNS As String = "call for papers,invitation to submit,special issue,guest editor,waived APC,open access opportunity"
+```ini
+; GOOD: include the name in the greeting
+GreetingPatterns=Dear Professor Xu,Dear Prof. Xu,Dear Xin,Hi Xin
 ```
 
 ---
 
-## Learned Sender Rules (Self-Improving)
+## Academic Configuration Example
 
-Unlike the static patterns above, learned rules are created by **dragging emails** into special folders:
+```ini
+[Patterns]
+ProtectedDomains=arxiv.org,researchgate.net,springer.com,ieee.org,acm.org,nature.com
 
-| Folder | Effect |
-|--------|--------|
-| **III** | Always **KEEP** emails from that sender |
-| **IIII** | Always **DELETE** emails from that sender |
+NamePatterns=Prof. Smith,Professor Smith,Dr. Smith,John Smith,J. Smith
 
-Learned rules have **Rule 0 priority** — they override ALL static patterns in Config.bas. This means if you drag a "noreply@company.com" email into III, future emails from that sender will be kept even though "noreply" normally triggers deletion.
+GreetingPatterns=Dear Professor Smith,Dear Prof. Smith,Dear Dr. Smith,Dear John,Hi John,Hello Professor
 
-### How It Works
+VIPSubjectKeywords=thesis,dissertation,defense,publication,manuscript,revision,grant,NSF,proposal,deadline,conference,ICML,NeurIPS,review request,referee,editor
 
-1. You drag an email into III or IIII
-2. The sender's email address is recorded in a text file
-3. The rule is immediately active in memory (no restart needed)
-4. On next Outlook startup, all rules are reloaded from file
+DeleteKnownSenders=Beall's List,Predatory Journals,OMICS
 
-### Data File
-
-Rules are stored at: `%APPDATA%\OutlookEmailFilter\learned_senders.txt`
-
-Format (pipe-delimited, append-only):
+DeleteSubjectPatterns=call for papers,invitation to submit,special issue,guest editor,waived APC,open access opportunity,be a reviewer
 ```
-sender@example.com|KEEP|2026-02-08 14:30:22
-spammer@junk.com|DELETE|2026-02-08 15:01:05
-```
-
-- Last entry per sender wins (you can override a previous decision)
-- Lines starting with `#` are treated as comments
-- You can edit this file manually with a text editor
-
-### Changing a Learned Rule
-
-To change a rule (e.g., from DELETE to KEEP): simply drag another email from that sender into the opposite folder. The new entry is appended and takes precedence.
-
-To remove all learned rules: delete the file at the path shown by `ShowLearnedSenders`.
-
-### Diagnostics
-
-| Macro | Purpose |
-|-------|---------|
-| `ShowLearnedSenders` | Display rule count and file path |
-| `ReloadLearnedSenders` | Force reload from file (after manual edits) |
-
-In dry-run output, learned rules show special icons:
-- `[+LR]` = Kept by learned rule
-- `[xLR]` = Deleted by learned rule
 
 ---
 
-## Backup Your Configuration
+## Learned Rules vs. Static Patterns
 
-Before making changes, copy your current `Config.bas` to a backup:
+Unlike the static patterns above, **learned rules** are created by dragging emails into special folders:
 
-1. In VBA Editor, right-click the **Config** module
-2. Select **Export File...**
-3. Save as `Config_backup_YYYYMMDD.bas`
+| Folder | Effect | Priority |
+|--------|--------|----------|
+| **LearnKeep** | Always **KEEP** emails from that sender | Rule 0 (highest) |
+| **LearnDelete** | Always **DELETE** emails from that sender | Rule 0 (highest) |
+| **LearnSubjectDelete** | Always **DELETE** emails with matching subject | Rule 0.5 |
+
+Learned rules override ALL static patterns. If you drag a `noreply@company.com` email into LearnKeep, future emails from that sender will be kept even though "noreply" normally triggers deletion.
+
+Data files: `%APPDATA%\OutlookEmailFilter\learned_senders.txt` and `learned_subjects.txt`
+
+To view all active learned rules:
+```
+ShowLearnedSendersList
+ShowLearnedSubjectsList
+```
+
+---
+
+## Backup Your Patterns
+
+Before making significant pattern changes:
+
+1. Copy `settings.ini` from `%APPDATA%\OutlookEmailFilter\` to a backup location
+2. Or export your VBA modules manually: in the VBA Editor, right-click each module → **Export File...**
+
+To revert: replace the file (or delete it and restart Outlook to regenerate defaults).

@@ -1,202 +1,117 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+VBA-based email agent for Outlook desktop (Windows only). Classifies emails via a priority rule chain with LLM fallback, learns from user feedback, and drafts replies. Designed for Professor Xu Xin at PolyU Hong Kong.
 
-## Project Overview
-
-VBA-based email filtering system for Microsoft Outlook desktop (Windows only). Classifies incoming emails using a priority-ordered rule chain with optional Azure OpenAI LLM fallback for ambiguous cases. External settings file, self-improving learned rules, and optional graphical Dashboard. Designed for Professor Xu Xin at PolyU Hong Kong.
-
-## Architecture
-
-Five VBA modules + two optional UserForms:
+## Architecture (v3.0)
 
 ```
-Config.bas          → DEFAULT_* constants (compile-time fallbacks) + Runtime* public variables
-                      (loaded from settings.ini at startup). Version constants.
+Config.bas       → DEFAULT_* constants + Runtime* public variables only (no logic)
     ↓
-Utilities.bas       → Helpers: string matching, JSON encoding/parsing, folder management, logging,
-                      email address extraction, INI reader/writer (settings.ini),
-                      learned senders/subjects cache (in-memory Dictionary + file I/O),
-                      learned rule deletion functions, cache accessor functions
+Utilities.bas    → All helpers: string match, JSON, logging, INI I/O, learned rules I/O,
+                   CallLLM (multi-provider), error handling (PushCallStack/LogError), reply pair I/O,
+                   Web UI command bridge (WriteResultFile, command poller via Win32 SetTimer)
     ↓
-EmailFilter.bas     → Core classification engine (ClassifyEmail with Rule 0/0.5 learned rules)
-                      + action executor (ExecuteAction) + LLM integration (classify/summarize/reply)
+EmailFilter.bas  → ClassifyEmail (10-rule chain) + ExecuteAction + LLM wrappers
+EmailAgent.bas   → Agent features: GenerateAddressingPatterns, DraftAutoReply, ScanSentForReplyPatterns
     ↓
-BatchFilter.bas     → Bulk operations: dry-run preview, filter inbox/all/selected/current folder,
-                      bulk delete by sender, reporting, undo helpers, diagnostics,
-                      Dashboard launcher, migration helper, export/version macros
+BatchFilter.bas  → Batch macros + thin wrappers calling EmailFilter/EmailAgent
     ↓
-ThisOutlookSession.bas → Outlook event handlers (Application_Startup calls LoadAllSettings first,
-                         inboxItems_ItemAdd for real-time filtering)
-                         + learning folder watchers (learnKeepItems, learnDeleteItems, learnSubjectDeleteItems)
-                         NOT a regular module — code is pasted into the built-in ThisOutlookSession object
-
-Optional UserForms (not required for core functionality):
-  frmFilterDashboard → 4-tab Dashboard (Filter Actions, Patterns, Settings, Learned Rules)
-  frmDraftReply      → LLM draft reply viewer with copy/create reply actions
+ThisOutlookSession.bas → Event handlers ONLY (Application_Startup, ItemAdd watchers for 4 learn folders,
+                         + inboxItems_ItemAdd real-time filter)
+                         NOT a regular module — paste into built-in ThisOutlookSession object
 ```
 
-UserForm references use late binding (`VBA.UserForms.Add("formName")`) so the code compiles and runs without the forms installed. `OpenDashboard` and `DraftReplyToSelected` fall back to MsgBox when forms are absent.
+**Web UI** (`webui/` — Python Flask, runs separately):
+```
+server.py          → Flask routes + orchestration
+bridge.py          → writes commands\<id>.json → reads commands\<id>.result
+settings_manager.py → settings.ini read/write (configparser)
+chat.py            → keyword→action parser
+static/            → SPA (index.html + style.css + app.js)
+```
+VBA side of bridge: `GetCommandsDir()` + `WriteResultFile()` in Utilities.bas,
+`StartCommandPollerStd` / `PollForCommandsTimer` / `StopCommandPollerStd` in Utilities.bas.
 
 ## Two-Layer Configuration
 
-All settings use a two-layer system:
-
-1. **`DEFAULT_*` constants** in `Config.bas` — compile-time fallbacks, never change at runtime
-2. **`Runtime*` public variables** in `Config.bas` — loaded from `settings.ini` at startup via `LoadAllSettings`
-
-Settings file: `%APPDATA%\OutlookEmailFilter\settings.ini` (INI format with `[General]`, `[Folders]`, `[Patterns]`, `[LLM]` sections). Auto-created with defaults on first run.
-
-**Critical**: `LoadAllSettings` must be the VERY FIRST call in `Application_Startup`, before any folder resolution or event handler setup. The `RuntimeSettingsLoaded` flag gates `LogMessage` behavior before settings are loaded.
-
-### Key Runtime Variables
-
-| Variable | Source INI Key | Purpose |
-|----------|---------------|---------|
-| `RuntimeFolderProtected` | `[Folders] Protected` | Protected domain folder name |
-| `RuntimeFolderReview` | `[Folders] Review` | Ambiguous email folder name |
-| `RuntimeFolderLearnKeep` | `[Folders] LearnKeep` | Learn-keep folder name |
-| `RuntimeFolderLearnDelete` | `[Folders] LearnDelete` | Learn-delete folder name |
-| `RuntimeFolderLearnSubject` | `[Folders] LearnSubject` | Learn-subject-delete folder name |
-| `RuntimeProtectedDomains` | `[Patterns] ProtectedDomains` | Comma-separated domain list |
-| `RuntimeUseLLM` | `[LLM] UseLLMAPI` | Enable/disable LLM integration |
-| `RuntimeEnableSelfImproving` | `[General] EnableSelfImproving` | Enable/disable learning |
-| `RuntimeEnableLogging` | `[General] EnableLogging` | Enable/disable logging |
+- `DEFAULT_*` constants in `Config.bas` — compile-time fallbacks, never change at runtime
+- `Runtime*` variables in `Config.bas` — loaded from `settings.ini` at startup via `LoadAllSettings`
+- Settings file: `%APPDATA%\OutlookEmailFilter\settings.ini` (sections: General, Folders, Patterns, LLM, Agent)
+- `LoadAllSettings` MUST be the first call in `Application_Startup`
+- New settings require: add DEFAULT const + Runtime var + LoadAllSettings entry + CreateDefaultSettingsFile entry
 
 ## Classification Priority (first match wins)
 
-0. **Learned sender rule** (self-improving) → KEEP or DELETE (highest priority)
-0.5. **Learned subject rule** (self-improving) → DELETE (substring match)
-1. Protected domain → Move to Protected folder
-2. Personally addressed (name in subject/body, or greeting match) → Keep
-3. Organizational tags (e.g. `[MM]`, `[HRO]`) → Keep
-4. VIP subject keywords → Keep
-5. Reply chain (RE:/AW:) → Keep
-6. Forward chain (FW:/FWD:/WG:) → Keep
-7. Known spam sender names → Delete
-8. Spam sender email patterns (noreply, marketing, etc.) → Delete
-9. Spam subject keywords → Delete
-10. No match → LLM_REVIEW (LLM call if enabled, otherwise Review folder)
+0. Learned sender rule (KEEP or DELETE) — from `learned_senders.txt`
+0.5. Learned subject DELETE rule — substring match against `learned_subjects.txt`
+1–6. Rule-based KEEP: protected domain, personally addressed, org tags, VIP keywords, RE:, FW:
+7–9. Rule-based DELETE: known senders, sender patterns, subject patterns
+10. LLM_REVIEW → calls `CallLLM` if enabled, else moves to Review folder
 
-All pattern matching is comma-separated strings checked via `ContainsAny()` (case-insensitive substring match). The `POLYU_TAGS` check is the exception — uses case-sensitive matching.
+`ContainsAny()` is case-insensitive substring matching for all patterns including PolyU tags.
 
-Rule 0 uses an in-memory `Scripting.Dictionary` cache loaded from `learned_senders.txt`. Users teach the filter by dragging emails into the LearnKeep or LearnDelete folders.
+## Multi-Provider LLM (v3.0)
 
-Rule 0.5 uses a separate `Scripting.Dictionary` cache loaded from `learned_subjects.txt`. Users drag emails into the LearnSubjectDelete folder. Lookup uses case-insensitive substring matching (iterates all cached keys).
+`CallLLM(userPrompt, systemPrompt, maxTokens, [temperature])` in Utilities.bas routes to:
+- `"local"` → Ollama/LM Studio/Inferencer OpenAI-compatible endpoint at `RuntimeLocalEndpoint`
+- `"azure"` → Azure OpenAI at `RuntimeLLMEndpoint` (api-key header)
+- `"claude"` → Anthropic `/v1/messages` (x-api-key + anthropic-version headers, different JSON schema)
+- `"openai"` → External OpenAI-compatible API (OpenRouter, Groq, etc.) at `RuntimeOpenAIEndpoint` (Bearer token auth)
 
-## Key VBA Patterns
+`CallAzureOpenAICustom` is kept as a backwards-compatible wrapper; new code always calls `CallLLM`.
 
-- **Reverse iteration for deletions**: Batch operations iterate `For i = Count To 1 Step -1` because `.Delete` and `.Move` invalidate indices.
-- **Pre-capture before action**: `ExecuteAction` captures `SenderName` and `Subject` before calling `.Delete`/`.Move` since the mail object becomes invalid after these operations.
-- **Exchange address resolution**: `GetSenderEmail` handles Exchange internal addresses (`/O=...`) by resolving to SMTP via `GetExchangeUser.PrimarySmtpAddress`.
-- **Error-safe default**: `ClassifyEmail` returns "KEEP" on any error (safe fallback).
-- **`On Error Resume Next` blocks**: Used for optional folder access and Exchange address resolution — always followed by `On Error GoTo 0`.
-- **Append-only learned data file**: `RecordLearnedSender` appends to file and updates cache simultaneously. Last entry per sender wins when file is reloaded.
-- **Learning folder watchers**: `WithEvents` on LearnKeep/LearnDelete/LearnSubjectDelete folder Items collections. Since the filter never moves emails *to* these folders, every `ItemAdd` event is a manual user action.
-- **Retroactive rule reversal**: DELETE→KEEP triggers `RestoreSenderFromDeleted`; KEEP→DELETE triggers `DeleteSenderFromInbox`.
-- **Subject sanitization**: `SanitizeSubject()` strips `vbCr`, `vbLf`, `|`, `Chr(0)` from subjects before Dictionary key or file write — Exchange subjects can contain embedded newlines/null chars.
-- **INI read-modify-write**: `WriteINISetting` reads all lines into a Collection, finds/replaces the target key, handles missing sections/keys by appending, then rewrites the entire file.
+## Error Handling Pattern (v3.0)
 
-## Available Macros
+```vba
+Public Sub MyProcedure()
+    On Error GoTo PROC_ERR
+    PushCallStack "ModuleName.MyProcedure"
+    ' ... logic ...
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "ModuleName", "MyProcedure", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+```
 
-### Dashboard & Version
+`LogError` writes to `%APPDATA%\OutlookEmailFilter\error.log` and optionally shows MsgBox when `RuntimeDebugMode=True`.
 
-| Macro | Purpose |
-|-------|---------|
-| `OpenDashboard` | Open the Dashboard UserForm (falls back to MsgBox if not installed) |
-| `ShowVersionInfo` | Display version, settings paths, and status |
+## Key VBA Gotchas
 
-### Filtering
-
-| Macro | Purpose |
-|-------|---------|
-| `FilterExistingDryRun` | Preview decisions, no changes |
-| `FilterExistingEmails` | Filter all Inbox emails |
-| `FilterAllFolders` | Filter Inbox + Other + PST archives |
-| `FilterSelectedEmail` | Test classification on one selected email |
-| `FilterSelectedEmails` | Filter selected email(s) with confirmation |
-| `FilterCurrentFolder` | Filter current folder with confirmation |
-| `FilterLastNDays 7` | Filter last N days |
-| `GenerateClassificationReport` | Count classifications without acting |
-| `BulkDeleteBySender "pattern"` | Delete all from matching senders |
-| `MoveProtectedSources` | Move protected domain emails to Protected folder |
-
-### LLM Tools
-
-| Macro | Purpose |
-|-------|---------|
-| `SummarizeSelectedEmail` | Summarize selected email using LLM |
-| `DraftReplyToSelected` | Draft a reply using LLM (frmDraftReply if installed, else MsgBox) |
-
-### Learned Rules
-
-| Macro | Purpose |
-|-------|---------|
-| `ShowLearnedSenders` | Display learned rules count and file path |
-| `ShowLearnedSendersList` | Dump all sender rules to Immediate Window |
-| `ReloadLearnedSenders` | Force reload learned rules from file |
-| `CleanLearnedSendersFile` | Remove duplicate entries from learned senders file |
-| `ImportExistingLearnedFolders` | Bulk import senders from LearnKeep/LearnDelete folders |
-| `ShowLearnedSubjectsList` | Dump all subject rules to Immediate Window |
-| `CleanLearnedSubjectsFile` | Remove duplicate entries from learned subjects file |
-| `ImportExistingLearnedSubjectFolder` | Bulk import subjects from LearnSubjectDelete folder |
-
-### Server Rules
-
-| Macro | Purpose |
-|-------|---------|
-| `ImportServerRules` | Import server-side Outlook Rules as learned DELETE rules |
-| `ExportLearnedRulesToServer` | Export learned DELETE rules as server-side Outlook Rules |
-
-### Undo / Recovery
-
-| Macro | Purpose |
-|-------|---------|
-| `RestoreFromReview` | Move Review folder emails back to Inbox |
-| `RestoreDeletedKeepEmails` | Rescue wrongly deleted emails from Deleted Items |
-
-### Migration & System
-
-| Macro | Purpose |
-|-------|---------|
-| `DetectAndMigrateOldFolders` | Rename v1.x folders (I/II/III/IIII/V) to v2.0 names |
-| `ExportAllModules` | Export all VBA modules to Desktop |
-| `ReinitializeFilter` | Restart event handlers |
-| `EnableRealTimeFilter` | Turn on automatic filtering |
-| `DisableRealTimeFilter` | Turn off automatic filtering |
-
-## Quick Access Toolbar (QAT) Integration
-
-Recommended QAT buttons:
-- **`FilterSelectedEmails`** — filter selected email(s)
-- **`FilterCurrentFolder`** — filter current folder
-- **`FilterExistingDryRun`** — dry run preview
-
-Setup: File → Options → Quick Access Toolbar → choose "Macros" from dropdown → add macro.
-
-Context menu events (`ItemContextMenuDisplay` etc.) are deprecated and non-functional in Outlook 2013+; QAT buttons are the recommended pure-VBA approach.
-
-## Development Notes
-
-- No build system — VBA modules are imported directly into Outlook's VBA Editor (Alt+F11)
-- `ThisOutlookSession.bas` must be copy-pasted into the built-in module, not imported as a regular module
-- UserForms are **optional** — `.frm` files contain code-behind as text; binary `.frx` must be recreated manually in VBA Editor. All functionality works without forms via macros + settings.ini
-- `OpenDashboard` and `DraftReplyToSelected` use late binding (`VBA.UserForms.Add`) — compiles without forms, falls back to MsgBox
-- Real-time filtering (`inboxItems_ItemAdd`) is commented out by default; uncomment to enable
-- LLM integration defaults to off (`RuntimeUseLLM = False`); ambiguous emails go to Review folder
-- API keys: ENV method (environment variable) or HARDCODED method — configured via settings.ini `[LLM]` section
-- All configuration lives in `settings.ini` — edit with any text editor, no VBA code editing needed
-- Uses `Scripting.Dictionary` for statistics tracking, learned senders cache, and learned subjects cache (Windows COM dependency)
-- Self-improving data stored at `%APPDATA%\OutlookEmailFilter\learned_senders.txt` and `learned_subjects.txt` (auto-created)
-- Learning folders (LearnKeep, LearnDelete, LearnSubjectDelete) must be manually created under Inbox
-- `CallAzureOpenAICustom` is the general-purpose LLM call function; `CallAzureOpenAI` is a thin wrapper for classification
+- **No block scoping**: `Dim` inside a loop scopes to the procedure. Declare at top.
+- **Dictionary CompareMode**: Set `dict.CompareMode = 1` BEFORE first `.Add` or `dict(key) = value`.
+- **Reverse iteration**: Required for all loops that delete/move items (`For i = Count To 1 Step -1`).
+- **Pre-capture before action**: Capture `.SenderName` and `.Subject` before `.Delete`/`.Move` — object becomes invalid after.
+- **Exchange addresses**: Use `GetSenderEmail(mail)` not `.SenderEmailAddress` directly (handles `/O=...` internal format).
+- **SanitizeSubject()**: Must strip `vbCr`, `vbLf`, `|`, `Chr(0)` from subjects before Dictionary key or file write.
+- **Locale-safe decimal**: `Format(temp, "0.00")` + `Replace(..., ",", ".")` before embedding in JSON strings.
 
 ## Data Files
 
-| File | Location | Contents |
-|------|----------|----------|
-| `settings.ini` | `%APPDATA%\OutlookEmailFilter\` | All configurable settings (INI format) |
-| `learned_senders.txt` | `%APPDATA%\OutlookEmailFilter\` | Sender rules (email\|action\|timestamp) |
-| `learned_subjects.txt` | `%APPDATA%\OutlookEmailFilter\` | Subject rules (subject\|DELETE\|timestamp) |
+See [@docs/data-files.md](docs/data-files.md) for file locations, formats, and I/O functions.
 
-Data files are pipe-delimited, append-only. Last entry per key wins.
+## Available Macros
+
+See [@docs/macros.md](docs/macros.md) for the full macro reference table.
+
+## Development Notes
+
+- No build system — import `.bas` files directly in VBA Editor (Alt+F11)
+- `ThisOutlookSession.bas` must be copy-pasted into the built-in module, not imported
+- Real-time filtering (`inboxItems_ItemAdd`) is enabled by default; disable via `ThisOutlookSession.DisableRealTimeFilter`
+- LLM integration defaults to off (`RuntimeUseLLM = False`)
+- Learning folders (LearnKeep, LearnDelete, LearnSubjectDelete, LearnReply) must be manually created under Inbox
+- Web UI: `cd webui && python server.py` → `http://localhost:5000`
+  - Command bridge polls `%APPDATA%\OutlookEmailFilter\commands\` every 2 s
+  - Win32 `SetTimer` in Utilities.bas fires `PollerCallback` every 2 s
+  - Bridge timeout is 120 s in Web UI; result files written as UTF-8 via `ADODB.Stream`
+
+## DO NOT
+
+- Do NOT add business logic to `Config.bas` — constants and Runtime variables only
+- Do NOT call `CallAzureOpenAICustom` in new code — use `CallLLM` instead
+- Do NOT assume `.SenderEmailAddress` returns SMTP — always use `GetSenderEmail(mail)`
+- Do NOT write to pipe-delimited data files without `SanitizeSubject()` on all text fields
+- Do NOT change `DEFAULT_*` constants to modify runtime behavior — use `WriteINISetting` to update settings.ini

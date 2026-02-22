@@ -1,5 +1,5 @@
 '===============================================================================
-' Utilities.bas - Helper Functions for Email Filter v2.0
+' Utilities.bas - Helper Functions for Email Agent v3.0
 '===============================================================================
 ' This module contains utility functions used across the email filter:
 '   - String matching (ContainsAny, StartsWithAny, MatchesAny)
@@ -10,21 +10,449 @@
 '   - Learned senders/subjects cache (in-memory Dictionary + file I/O)
 '   - Settings INI reader/writer
 '   - Learned rule deletion
+'   - Call stack tracking and centralized error handling
+'   - Multi-provider LLM caller (CallLLM)
+'   - Reply pair I/O (learned_replies.txt)
 '===============================================================================
 
 Option Explicit
 
 '-------------------------------------------------------------------------------
-' LEARNED SENDERS CACHE (Self-Improving Filter)
+' CALL STACK TRACKING
 '-------------------------------------------------------------------------------
+' Simulates a call stack using a fixed-size array. PushCallStack is called at
+' the start of each instrumented procedure; PopCallStack in its PROC_EXIT label.
+' GetCallStack returns a " -> " separated string for use in error log entries.
+
+Private callStack(0 To 19) As String  ' CALL_STACK_MAX_DEPTH = 20
+Private callStackDepth As Integer
+
+' Learned senders cache (Self-Improving Filter)
 Private learnedSendersCache As Object  ' Scripting.Dictionary (email -> "KEEP"|"DELETE")
 Private learnedSendersCacheLoaded As Boolean
+
+' Learned subjects cache (Self-Improving Filter - Subject Rules)
+Private learnedSubjectsCache As Object  ' Scripting.Dictionary (subject -> "DELETE")
+Private learnedSubjectsCacheLoaded As Boolean
+
+' Web UI command poller state
+Private pollerRunningFlag As Boolean
+
+' Windows API timer for command poller (Outlook has no Application.OnTime)
+#If VBA7 Then
+    Private Declare PtrSafe Function SetTimer Lib "user32" ( _
+        ByVal hWnd As LongPtr, ByVal nIDEvent As LongPtr, _
+        ByVal uElapse As Long, ByVal lpTimerFunc As LongPtr) As LongPtr
+    Private Declare PtrSafe Function KillTimer Lib "user32" ( _
+        ByVal hWnd As LongPtr, ByVal nIDEvent As LongPtr) As Long
+    Private pollerTimerId As LongPtr
+#Else
+    Private Declare Function SetTimer Lib "user32" ( _
+        ByVal hWnd As Long, ByVal nIDEvent As Long, _
+        ByVal uElapse As Long, ByVal lpTimerFunc As Long) As Long
+    Private Declare Function KillTimer Lib "user32" ( _
+        ByVal hWnd As Long, ByVal nIDEvent As Long) As Long
+    Private pollerTimerId As Long
+#End If
+
+Public Sub PushCallStack(ByVal procName As String)
+    If callStackDepth < CALL_STACK_MAX_DEPTH Then
+        callStack(callStackDepth) = procName
+        callStackDepth = callStackDepth + 1
+    End If
+End Sub
+
+Public Sub PopCallStack()
+    If callStackDepth > 0 Then
+        callStackDepth = callStackDepth - 1
+        callStack(callStackDepth) = ""
+    End If
+End Sub
+
+Public Function GetCallStack() As String
+    Dim i As Integer
+    Dim parts() As String
+    If callStackDepth = 0 Then
+        GetCallStack = "(empty)"
+        Exit Function
+    End If
+    ReDim parts(0 To callStackDepth - 1)
+    For i = 0 To callStackDepth - 1
+        parts(i) = callStack(i)
+    Next i
+    GetCallStack = Join(parts, " -> ")
+End Function
+
+'-------------------------------------------------------------------------------
+' CENTRALIZED ERROR HANDLING
+'-------------------------------------------------------------------------------
+' LogError writes a structured entry to error.log and optionally shows a MsgBox.
+' WriteToLogFile handles the file I/O for all log-to-file operations.
+
+Public Sub LogError(ByVal moduleName As String, ByVal procName As String, _
+                    ByVal errNum As Long, ByVal errDesc As String, _
+                    Optional ByVal context As String = "")
+    Dim entry As String
+    Dim stackStr As String
+
+    stackStr = GetCallStack()
+    entry = Format(Now, "yyyy-mm-dd hh:nn:ss") & "|" & _
+            moduleName & "." & procName & "|" & _
+            errNum & "|" & _
+            errDesc
+
+    If Len(context) > 0 Then entry = entry & "|" & context
+    entry = entry & "|Stack: " & stackStr
+
+    ' Write to log file (best effort - do not raise new error)
+    On Error Resume Next
+    WriteToLogFile entry
+    On Error GoTo 0
+
+    ' Write to Immediate Window
+    Debug.Print entry
+
+    ' Optionally show MsgBox in debug mode
+    If RuntimeDebugMode Then
+        MsgBox "Error in " & moduleName & "." & procName & ":" & vbCrLf & _
+               "  " & errDesc & " (Error " & errNum & ")" & vbCrLf & vbCrLf & _
+               "Stack: " & stackStr, _
+               vbExclamation, "Email Agent Error"
+    End If
+End Sub
+
+' NOTE: No error handler here — this is called from LogError/LogMessage,
+' so adding LogError would cause infinite recursion. Callers use On Error Resume Next.
+Public Sub WriteToLogFile(ByVal message As String)
+    Dim fso As Object
+    Dim ts As Object
+    Dim logPath As String
+
+    ' Build path if not yet set (RuntimeErrorLogFile set in LoadAllSettings)
+    If Len(RuntimeErrorLogFile) = 0 Then
+        logPath = Environ("APPDATA") & "\" & LEARNED_DATA_FOLDER & "\" & ERROR_LOG_FILE_NAME
+    Else
+        logPath = RuntimeErrorLogFile
+    End If
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Set ts = fso.OpenTextFile(logPath, 8, True)  ' 8 = ForAppending, True = create if missing
+    ts.WriteLine message
+    ts.Close
+    Set ts = Nothing
+    Set fso = Nothing
+End Sub
+
+'-------------------------------------------------------------------------------
+' MULTI-PROVIDER LLM CALLER
+'-------------------------------------------------------------------------------
+' CallLLM routes to the configured provider (local | azure | claude | openai).
+' Returns the raw response content string, or "" on error/no key.
+' All callers should use CallLLM instead of CallAzureOpenAICustom (kept for
+' backwards-compatibility but now delegates here).
+
+Public Function CallLLM(ByVal userPrompt As String, ByVal systemPrompt As String, _
+                        ByVal maxTokens As Integer, _
+                        Optional ByVal temperature As Double = -1) As String
+    On Error GoTo LLMError
+    PushCallStack "Utilities.CallLLM"
+
+    ' Use the per-call temperature if given; otherwise use the classify default
+    Dim temp As Double
+    If temperature < 0 Then
+        temp = RuntimeLLMTemperature
+    Else
+        temp = temperature
+    End If
+
+    Dim provider As String
+    provider = LCase(Trim(RuntimeLLMProvider))
+    If Len(provider) = 0 Then provider = "azure"
+
+    Select Case provider
+        Case "local"
+            CallLLM = CallLLMLocal(userPrompt, systemPrompt, maxTokens, temp)
+        Case "claude"
+            CallLLM = CallLLMClaude(userPrompt, systemPrompt, maxTokens, temp)
+        Case "openai"
+            CallLLM = CallLLMOpenAI(userPrompt, systemPrompt, maxTokens, temp)
+        Case Else  ' "azure" and anything unrecognised
+            CallLLM = CallLLMAzure(userPrompt, systemPrompt, maxTokens, temp)
+    End Select
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+LLMError:
+    LogError "Utilities", "CallLLM", Err.Number, Err.Description
+    CallLLM = ""
+    Resume PROC_EXIT
+End Function
+
+' Build OpenAI-compatible chat/completions JSON body (shared by azure & local)
+Private Function BuildOpenAIBody(ByVal userPrompt As String, ByVal systemPrompt As String, _
+                                  ByVal maxTokens As Integer, ByVal temp As Double) As String
+    ' Force "." decimal separator regardless of Windows locale
+    Dim tempStr As String
+    tempStr = Format(temp, "0.00")
+    tempStr = Replace(tempStr, ",", ".")
+
+    BuildOpenAIBody = "{" & _
+        """messages"":[" & _
+            "{""role"":""system"",""content"":""" & EscapeJSON(systemPrompt) & """}," & _
+            "{""role"":""user"",""content"":""" & EscapeJSON(userPrompt) & """}" & _
+        "]," & _
+        """max_tokens"":" & maxTokens & "," & _
+        """temperature"":" & tempStr & "," & _
+        """stream"":false" & _
+    "}"
+End Function
+
+' Call local OpenAI-compatible endpoint (Ollama, LM Studio, Inferencer, etc.)
+Private Function CallLLMLocal(ByVal userPrompt As String, ByVal systemPrompt As String, _
+                               ByVal maxTokens As Integer, ByVal temp As Double) As String
+    Dim http As Object
+    Dim body As String
+
+    ' Inject model name into body for local servers
+    Dim tempStr As String
+    tempStr = Format(temp, "0.00")
+    tempStr = Replace(tempStr, ",", ".")
+
+    body = "{" & _
+        """model"":""" & RuntimeLocalModel & """," & _
+        """messages"":[" & _
+            "{""role"":""system"",""content"":""" & EscapeJSON(systemPrompt) & """}," & _
+            "{""role"":""user"",""content"":""" & EscapeJSON(userPrompt) & """}" & _
+        "]," & _
+        """max_tokens"":" & maxTokens & "," & _
+        """temperature"":" & tempStr & "," & _
+        """stream"":false" & _
+    "}"
+
+    LogMessage "DEBUG", "Calling local LLM at " & RuntimeLocalEndpoint & " (model: " & RuntimeLocalModel & ")"
+
+    Set http = CreateObject("MSXML2.XMLHTTP")
+    http.Open "POST", RuntimeLocalEndpoint, False
+    http.setRequestHeader "Content-Type", "application/json"
+    ' Local servers typically accept any key or no key; provide a dummy to avoid rejections
+    http.setRequestHeader "Authorization", "Bearer local"
+    http.send body
+
+    If http.Status = 200 Then
+        Dim result As String
+        result = ParseJSONContent(http.responseText)
+        LogMessage "DEBUG", "Local LLM response: " & Left(result, 100)
+        WriteLLMDebugLog "CallLLMLocal", RuntimeLocalEndpoint, RuntimeLocalModel, _
+                         maxTokens, temp, body, http.Status, http.responseText, result
+        CallLLMLocal = result
+    Else
+        LogMessage "ERROR", "Local LLM error: " & http.Status & " - " & http.statusText
+        WriteLLMDebugLog "CallLLMLocal", RuntimeLocalEndpoint, RuntimeLocalModel, _
+                         maxTokens, temp, body, http.Status, http.responseText, ""
+        CallLLMLocal = ""
+    End If
+
+    Set http = Nothing
+End Function
+
+' Call external OpenAI-compatible endpoint (OpenRouter, Groq, Together AI, OpenAI, etc.)
+' Unlike CallLLMLocal, this requires a real API key via GetAPIKey().
+Private Function CallLLMOpenAI(ByVal userPrompt As String, ByVal systemPrompt As String, _
+                                ByVal maxTokens As Integer, ByVal temp As Double) As String
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.CallLLMOpenAI"
+
+    Dim http As Object
+    Dim apiKey As String
+
+    apiKey = GetAPIKey()
+    If Len(apiKey) = 0 Then
+        LogMessage "WARN", "CallLLMOpenAI: no API key"
+        CallLLMOpenAI = ""
+        GoTo PROC_EXIT
+    End If
+
+    ' Build body with model name (OpenAI-compatible format)
+    Dim tempStr As String
+    tempStr = Format(temp, "0.00")
+    tempStr = Replace(tempStr, ",", ".")
+
+    Dim body As String
+    body = "{" & _
+        """model"":""" & RuntimeOpenAIModel & """," & _
+        """messages"":[" & _
+            "{""role"":""system"",""content"":""" & EscapeJSON(systemPrompt) & """}," & _
+            "{""role"":""user"",""content"":""" & EscapeJSON(userPrompt) & """}" & _
+        "]," & _
+        """max_tokens"":" & maxTokens & "," & _
+        """temperature"":" & tempStr & "," & _
+        """stream"":false" & _
+    "}"
+
+    LogMessage "DEBUG", "Calling OpenAI-compatible API at " & RuntimeOpenAIEndpoint & " (model: " & RuntimeOpenAIModel & ")"
+
+    Set http = CreateObject("MSXML2.XMLHTTP")
+    http.Open "POST", RuntimeOpenAIEndpoint, False
+    http.setRequestHeader "Content-Type", "application/json"
+    http.setRequestHeader "Authorization", "Bearer " & apiKey
+    http.send body
+
+    If http.Status = 200 Then
+        Dim result As String
+        result = ParseJSONContent(http.responseText)
+        LogMessage "DEBUG", "OpenAI-compatible LLM response: " & Left(result, 100)
+        WriteLLMDebugLog "CallLLMOpenAI", RuntimeOpenAIEndpoint, RuntimeOpenAIModel, _
+                         maxTokens, temp, body, http.Status, http.responseText, result
+        CallLLMOpenAI = result
+    Else
+        LogMessage "ERROR", "OpenAI-compatible API error: " & http.Status & " - " & http.statusText
+        WriteLLMDebugLog "CallLLMOpenAI", RuntimeOpenAIEndpoint, RuntimeOpenAIModel, _
+                         maxTokens, temp, body, http.Status, http.responseText, ""
+        CallLLMOpenAI = ""
+    End If
+
+    Set http = Nothing
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "Utilities", "CallLLMOpenAI", Err.Number, Err.Description
+    CallLLMOpenAI = ""
+    Resume PROC_EXIT
+End Function
+
+' Call Azure OpenAI endpoint
+Private Function CallLLMAzure(ByVal userPrompt As String, ByVal systemPrompt As String, _
+                               ByVal maxTokens As Integer, ByVal temp As Double) As String
+    Dim http As Object
+    Dim apiKey As String
+
+    apiKey = GetAPIKey()
+    If Len(apiKey) = 0 Then
+        LogMessage "WARN", "CallLLMAzure: no API key"
+        CallLLMAzure = ""
+        Exit Function
+    End If
+
+    Dim body As String
+    body = BuildOpenAIBody(userPrompt, systemPrompt, maxTokens, temp)
+
+    LogMessage "DEBUG", "Calling Azure OpenAI..."
+
+    Set http = CreateObject("MSXML2.XMLHTTP")
+    http.Open "POST", RuntimeLLMEndpoint, False
+    http.setRequestHeader "Content-Type", "application/json"
+    http.setRequestHeader "api-key", apiKey
+    http.send body
+
+    If http.Status = 200 Then
+        Dim result As String
+        result = ParseJSONContent(http.responseText)
+        LogMessage "DEBUG", "Azure LLM response: " & Left(result, 100)
+        WriteLLMDebugLog "CallLLMAzure", RuntimeLLMEndpoint, "azure", _
+                         maxTokens, temp, body, http.Status, http.responseText, result
+        CallLLMAzure = result
+    Else
+        LogMessage "ERROR", "Azure OpenAI error: " & http.Status & " - " & http.statusText
+        WriteLLMDebugLog "CallLLMAzure", RuntimeLLMEndpoint, "azure", _
+                         maxTokens, temp, body, http.Status, http.responseText, ""
+        CallLLMAzure = ""
+    End If
+
+    Set http = Nothing
+End Function
+
+' Call Anthropic Claude API (/v1/messages - different schema from OpenAI)
+Private Function CallLLMClaude(ByVal userPrompt As String, ByVal systemPrompt As String, _
+                                ByVal maxTokens As Integer, ByVal temp As Double) As String
+    Dim http As Object
+    Dim apiKey As String
+
+    apiKey = GetAPIKey()
+    If Len(apiKey) = 0 Then
+        LogMessage "WARN", "CallLLMClaude: no API key"
+        CallLLMClaude = ""
+        Exit Function
+    End If
+
+    ' Force "." decimal separator regardless of Windows locale
+    Dim tempStr As String
+    tempStr = Format(temp, "0.00")
+    tempStr = Replace(tempStr, ",", ".")
+
+    ' Claude API uses a different JSON schema: system is top-level, model in body
+    Dim body As String
+    body = "{" & _
+        """model"":""" & RuntimeClaudeModel & """," & _
+        """system"":""" & EscapeJSON(systemPrompt) & """," & _
+        """messages"":[" & _
+            "{""role"":""user"",""content"":""" & EscapeJSON(userPrompt) & """}" & _
+        "]," & _
+        """max_tokens"":" & maxTokens & "," & _
+        """temperature"":" & tempStr & "," & _
+        """stream"":false" & _
+    "}"
+
+    LogMessage "DEBUG", "Calling Claude API (model: " & RuntimeClaudeModel & ")..."
+
+    Set http = CreateObject("MSXML2.XMLHTTP")
+    http.Open "POST", RuntimeClaudeEndpoint, False
+    http.setRequestHeader "Content-Type", "application/json"
+    http.setRequestHeader "x-api-key", apiKey
+    http.setRequestHeader "anthropic-version", "2023-06-01"
+    http.send body
+
+    If http.Status = 200 Then
+        ' Claude response format: {"content":[{"type":"text","text":"..."}],...}
+        ' We reuse ParseJSONContent but must find "text" field inside the content array
+        Dim rawResponse As String
+        rawResponse = http.responseText
+
+        ' Try to extract the first text block from Claude's response
+        Dim textStart As Long
+        textStart = InStr(1, rawResponse, """text"":", vbTextCompare)
+        If textStart > 0 Then
+            textStart = InStr(textStart, rawResponse, ":""") + 2
+            Dim textEnd As Long
+            textEnd = textStart
+            Do
+                textEnd = InStr(textEnd + 1, rawResponse, """")
+                If textEnd = 0 Then Exit Do
+                If Mid(rawResponse, textEnd - 1, 1) <> "\" Then Exit Do
+            Loop
+            Dim claudeResult As String
+            If textEnd > textStart Then
+                claudeResult = Mid(rawResponse, textStart, textEnd - textStart)
+                claudeResult = Replace(claudeResult, "\n", vbCrLf)
+                claudeResult = Replace(claudeResult, "\t", vbTab)
+                claudeResult = Replace(claudeResult, "\""", """")
+                claudeResult = Replace(claudeResult, "\\", "\")
+            End If
+        End If
+
+        LogMessage "DEBUG", "Claude LLM response: " & Left(claudeResult, 100)
+        WriteLLMDebugLog "CallLLMClaude", RuntimeClaudeEndpoint, RuntimeClaudeModel, _
+                         maxTokens, temp, body, http.Status, http.responseText, claudeResult
+        CallLLMClaude = claudeResult
+    Else
+        LogMessage "ERROR", "Claude API error: " & http.Status & " - " & http.statusText
+        WriteLLMDebugLog "CallLLMClaude", RuntimeClaudeEndpoint, RuntimeClaudeModel, _
+                         maxTokens, temp, body, http.Status, http.responseText, ""
+        CallLLMClaude = ""
+    End If
+
+    Set http = Nothing
+End Function
+
+'-------------------------------------------------------------------------------
+' LEARNED SENDERS CACHE (Self-Improving Filter)
+'-------------------------------------------------------------------------------
 
 '-------------------------------------------------------------------------------
 ' LEARNED SUBJECTS CACHE (Self-Improving Filter - Subject Rules)
 '-------------------------------------------------------------------------------
-Private learnedSubjectsCache As Object  ' Scripting.Dictionary (subject -> "DELETE")
-Private learnedSubjectsCacheLoaded As Boolean
 
 '-------------------------------------------------------------------------------
 ' STRING MATCHING FUNCTIONS
@@ -360,6 +788,7 @@ End Function
 Public Function CreateStatsDict() As Object
     Dim dict As Object
     Set dict = CreateObject("Scripting.Dictionary")
+    dict.CompareMode = 1  ' Case-insensitive (project convention)
 
     dict("DELETE") = 0
     dict("MOVE_II") = 0
@@ -428,6 +857,59 @@ Public Function GetSettingsFilePath() As String
     GetSettingsFilePath = folderPath & "\" & SETTINGS_FILE_NAME
 End Function
 
+' Build the full path to the LLM debug log file, creating the directory if needed
+Public Function GetLLMDebugLogPath() As String
+    Dim folderPath As String
+    Dim fso As Object
+
+    folderPath = Environ("APPDATA") & "\" & LEARNED_DATA_FOLDER
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(folderPath) Then
+        fso.CreateFolder folderPath
+    End If
+    Set fso = Nothing
+
+    GetLLMDebugLogPath = folderPath & "\llm_debug.log"
+End Function
+
+' Write verbose LLM request/response to llm_debug.log (only when LogLevel=DEBUG).
+' Best-effort: failures here never break LLM calls.
+Private Sub WriteLLMDebugLog(ByVal provider As String, ByVal endpoint As String, _
+                              ByVal model As String, ByVal maxTokens As Integer, _
+                              ByVal temperature As Double, ByVal requestBody As String, _
+                              ByVal httpStatus As Long, ByVal responseBody As String, _
+                              ByVal parsedContent As String)
+    On Error Resume Next
+
+    ' Only write when LogLevel is DEBUG
+    If UCase(RuntimeLogLevel) <> "DEBUG" Then Exit Sub
+
+    Dim fso As Object
+    Dim ts As Object
+    Dim logPath As String
+    Dim tempStr As String
+
+    logPath = GetLLMDebugLogPath()
+    tempStr = Format(temperature, "0.00")
+    tempStr = Replace(tempStr, ",", ".")
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Set ts = fso.OpenTextFile(logPath, 8, True)  ' 8 = ForAppending, True = create if missing
+    ts.WriteLine String(80, "=")
+    ts.WriteLine Format(Now, "yyyy-mm-dd hh:nn:ss") & " | " & provider & " | " & model & " | " & endpoint
+    ts.WriteLine "--- REQUEST (max_tokens=" & maxTokens & ", temperature=" & tempStr & ") ---"
+    ts.WriteLine requestBody
+    ts.WriteLine "--- RESPONSE (HTTP " & httpStatus & ", " & Len(responseBody) & " chars) ---"
+    ts.WriteLine responseBody
+    ts.WriteLine "--- PARSED (" & Len(parsedContent) & " chars) ---"
+    ts.WriteLine parsedContent
+    ts.WriteLine String(80, "=")
+    ts.Close
+    Set ts = Nothing
+    Set fso = Nothing
+End Sub
+
 ' Load all settings from the INI file into Runtime* variables.
 ' If the INI file doesn't exist, creates one with defaults.
 ' MUST be called at the very start of Application_Startup.
@@ -473,13 +955,37 @@ Public Sub LoadAllSettings()
 
     ' --- LLM ---
     RuntimeUseLLM = ReadINIBool("LLM", "UseLLMAPI", DEFAULT_USE_LLM_API)
-    RuntimeLLMEndpoint = ReadINISetting("LLM", "Endpoint", DEFAULT_AZURE_OPENAI_ENDPOINT)
+    RuntimeLLMProvider = ReadINISetting("LLM", "Provider", DEFAULT_LLM_PROVIDER)
+    RuntimeLLMEndpoint = ReadINISetting("LLM", "AzureEndpoint", DEFAULT_AZURE_OPENAI_ENDPOINT)
+    RuntimeLocalEndpoint = ReadINISetting("LLM", "LocalEndpoint", DEFAULT_LOCAL_ENDPOINT)
+    RuntimeLocalModel = ReadINISetting("LLM", "LocalModel", DEFAULT_LOCAL_MODEL)
+    RuntimeClaudeEndpoint = ReadINISetting("LLM", "ClaudeEndpoint", DEFAULT_CLAUDE_ENDPOINT)
+    RuntimeClaudeModel = ReadINISetting("LLM", "ClaudeModel", DEFAULT_CLAUDE_MODEL)
+    RuntimeOpenAIEndpoint = ReadINISetting("LLM", "OpenAIEndpoint", DEFAULT_OPENAI_COMPAT_ENDPOINT)
+    RuntimeOpenAIModel = ReadINISetting("LLM", "OpenAIModel", DEFAULT_OPENAI_COMPAT_MODEL)
     RuntimeAPIKeyMethod = ReadINISetting("LLM", "APIKeyMethod", DEFAULT_API_KEY_METHOD)
     RuntimeAPIKeyEnvVar = ReadINISetting("LLM", "APIKeyEnvVar", DEFAULT_API_KEY_ENV_VAR)
     RuntimeAPIKeyHardcoded = ReadINISetting("LLM", "APIKeyHardcoded", DEFAULT_API_KEY_HARDCODED)
-    RuntimeLLMMaxTokens = ReadINIInt("LLM", "MaxTokens", DEFAULT_LLM_MAX_TOKENS)
+    RuntimeClassifyMaxTokens = ReadINIInt("LLM", "ClassifyMaxTokens", DEFAULT_CLASSIFY_MAX_TOKENS)
+    RuntimeSummarizeMaxTokens = ReadINIInt("LLM", "SummarizeMaxTokens", DEFAULT_SUMMARIZE_MAX_TOKENS)
+    RuntimeReplyMaxTokens = ReadINIInt("LLM", "ReplyMaxTokens", DEFAULT_REPLY_MAX_TOKENS)
     RuntimeLLMTemperature = ReadINIDouble("LLM", "Temperature", DEFAULT_LLM_TEMPERATURE)
+    RuntimeReplyTemperature = ReadINIDouble("LLM", "ReplyTemperature", DEFAULT_REPLY_TEMPERATURE)
     RuntimeLLMSystemPrompt = ReadINISetting("LLM", "SystemPrompt", DEFAULT_LLM_SYSTEM_PROMPT)
+
+    ' --- Agent ---
+    RuntimeEnableAutoReply = ReadINIBool("Agent", "EnableAutoReply", DEFAULT_ENABLE_AUTO_REPLY)
+    RuntimeAutoReplyOnArrival = ReadINIBool("Agent", "AutoReplyOnArrival", DEFAULT_AUTO_REPLY_ON_ARRIVAL)
+    RuntimeFolderLearnReply = ReadINISetting("Agent", "LearnReplyFolder", DEFAULT_FOLDER_LEARN_REPLY)
+    RuntimeMaxReplyExamples = ReadINIInt("Agent", "MaxReplyExamples", DEFAULT_MAX_REPLY_EXAMPLES)
+    RuntimeReplyPersona = ReadINISetting("Agent", "ReplyPersona", DEFAULT_REPLY_PERSONA)
+    RuntimeScanSentItems = ReadINIBool("Agent", "ScanSentItems", DEFAULT_SCAN_SENT_ITEMS)
+    RuntimeScanSentDays = ReadINIInt("Agent", "ScanSentDays", DEFAULT_SCAN_SENT_DAYS)
+    RuntimeAutoReplyForSenders = ReadINISetting("Agent", "AutoReplyForSenders", DEFAULT_AUTO_REPLY_FOR_SENDERS)
+
+    ' --- Debug / Error handling ---
+    RuntimeDebugMode = ReadINIBool("General", "DebugMode", DEFAULT_DEBUG_MODE)
+    RuntimeErrorLogFile = Environ("APPDATA") & "\" & LEARNED_DATA_FOLDER & "\" & ERROR_LOG_FILE_NAME
 
     RuntimeSettingsLoaded = True
     LogMessage "INFO", "Settings loaded from: " & settingsPath
@@ -502,6 +1008,7 @@ Public Sub CreateDefaultSettingsFile()
     ts.WriteLine "EnableLogging=" & IIf(DEFAULT_ENABLE_LOGGING, "True", "False")
     ts.WriteLine "LogLevel=" & DEFAULT_LOG_LEVEL
     ts.WriteLine "EnableSelfImproving=" & IIf(DEFAULT_ENABLE_SELF_IMPROVING, "True", "False")
+    ts.WriteLine "DebugMode=" & IIf(DEFAULT_DEBUG_MODE, "True", "False")
     ts.WriteLine "ProgressInterval=" & DEFAULT_PROGRESS_INTERVAL
     ts.WriteLine "DryRunLimit=" & DEFAULT_DRY_RUN_LIMIT
     ts.WriteLine "LLMBatchSize=" & DEFAULT_LLM_BATCH_SIZE
@@ -525,13 +1032,34 @@ Public Sub CreateDefaultSettingsFile()
     ts.WriteLine ""
     ts.WriteLine "[LLM]"
     ts.WriteLine "UseLLMAPI=" & IIf(DEFAULT_USE_LLM_API, "True", "False")
-    ts.WriteLine "Endpoint=" & DEFAULT_AZURE_OPENAI_ENDPOINT
+    ts.WriteLine "; Provider: local | azure | claude | openai"
+    ts.WriteLine "Provider=" & DEFAULT_LLM_PROVIDER
+    ts.WriteLine "AzureEndpoint=" & DEFAULT_AZURE_OPENAI_ENDPOINT
+    ts.WriteLine "LocalEndpoint=" & DEFAULT_LOCAL_ENDPOINT
+    ts.WriteLine "LocalModel=" & DEFAULT_LOCAL_MODEL
+    ts.WriteLine "ClaudeEndpoint=" & DEFAULT_CLAUDE_ENDPOINT
+    ts.WriteLine "ClaudeModel=" & DEFAULT_CLAUDE_MODEL
+    ts.WriteLine "OpenAIEndpoint=" & DEFAULT_OPENAI_COMPAT_ENDPOINT
+    ts.WriteLine "OpenAIModel=" & DEFAULT_OPENAI_COMPAT_MODEL
     ts.WriteLine "APIKeyMethod=" & DEFAULT_API_KEY_METHOD
     ts.WriteLine "APIKeyEnvVar=" & DEFAULT_API_KEY_ENV_VAR
     ts.WriteLine "APIKeyHardcoded=" & DEFAULT_API_KEY_HARDCODED
-    ts.WriteLine "MaxTokens=" & DEFAULT_LLM_MAX_TOKENS
+    ts.WriteLine "ClassifyMaxTokens=" & DEFAULT_CLASSIFY_MAX_TOKENS
+    ts.WriteLine "SummarizeMaxTokens=" & DEFAULT_SUMMARIZE_MAX_TOKENS
+    ts.WriteLine "ReplyMaxTokens=" & DEFAULT_REPLY_MAX_TOKENS
     ts.WriteLine "Temperature=" & DEFAULT_LLM_TEMPERATURE
+    ts.WriteLine "ReplyTemperature=" & DEFAULT_REPLY_TEMPERATURE
     ts.WriteLine "SystemPrompt=" & DEFAULT_LLM_SYSTEM_PROMPT
+    ts.WriteLine ""
+    ts.WriteLine "[Agent]"
+    ts.WriteLine "EnableAutoReply=" & IIf(DEFAULT_ENABLE_AUTO_REPLY, "True", "False")
+    ts.WriteLine "AutoReplyOnArrival=" & IIf(DEFAULT_AUTO_REPLY_ON_ARRIVAL, "True", "False")
+    ts.WriteLine "LearnReplyFolder=" & DEFAULT_FOLDER_LEARN_REPLY
+    ts.WriteLine "MaxReplyExamples=" & DEFAULT_MAX_REPLY_EXAMPLES
+    ts.WriteLine "ReplyPersona=" & DEFAULT_REPLY_PERSONA
+    ts.WriteLine "ScanSentItems=" & IIf(DEFAULT_SCAN_SENT_ITEMS, "True", "False")
+    ts.WriteLine "ScanSentDays=" & DEFAULT_SCAN_SENT_DAYS
+    ts.WriteLine "AutoReplyForSenders=" & DEFAULT_AUTO_REPLY_FOR_SENDERS
 
     ts.Close
     Set ts = Nothing
@@ -595,7 +1123,7 @@ Public Function ReadINISetting(ByVal section As String, ByVal key As String, ByV
             eqPos = InStr(1, line, "=")
             If eqPos > 0 Then
                 If LCase(Trim(Left(line, eqPos - 1))) = LCase(key) Then
-                    ReadINISetting = Mid(line, eqPos + 1)
+                    ReadINISetting = Trim(Mid(line, eqPos + 1))
                     ts.Close
                     Set ts = Nothing
                     Set fso = Nothing
@@ -658,6 +1186,9 @@ Public Sub WriteINISetting(ByVal section As String, ByVal key As String, ByVal v
     Dim sectionFound As Boolean
     Dim lastSectionLine As Long
     Dim i As Long
+    Dim j As Long
+    Dim tempLines As Collection
+    Dim replacedLines As Collection
 
     filePath = GetSettingsFilePath()
 
@@ -689,9 +1220,7 @@ Public Sub WriteINISetting(ByVal section As String, ByVal key As String, ByVal v
             ' we need to insert the key before this new section
             If sectionFound And Not found Then
                 ' Insert key=value before this section header
-                Dim tempLines As Collection
                 Set tempLines = New Collection
-                Dim j As Long
                 For j = 1 To i - 1
                     tempLines.Add allLines(j)
                 Next j
@@ -718,7 +1247,6 @@ Public Sub WriteINISetting(ByVal section As String, ByVal key As String, ByVal v
             If eqPos > 0 Then
                 If LCase(Trim(Left(line, eqPos - 1))) = LCase(key) Then
                     ' Replace this line
-                    Dim replacedLines As Collection
                     Set replacedLines = New Collection
                     For j = 1 To allLines.Count
                         If j = i Then
@@ -942,7 +1470,8 @@ Public Function RestoreSenderFromDeleted(ByVal senderEmail As String) As Long
     Dim restoredCount As Long
     Dim itemEmail As String
 
-    On Error GoTo ErrorHandler
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.RestoreSenderFromDeleted"
 
     Set deletedFolder = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderDeletedItems)
     Set inbox = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox)
@@ -963,11 +1492,14 @@ Public Function RestoreSenderFromDeleted(ByVal senderEmail As String) As Long
     Next i
 
     RestoreSenderFromDeleted = restoredCount
-    Exit Function
 
-ErrorHandler:
-    LogMessage "ERROR", "RestoreSenderFromDeleted error: " & Err.Description
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "Utilities", "RestoreSenderFromDeleted", Err.Number, Err.Description
     RestoreSenderFromDeleted = restoredCount
+    Resume PROC_EXIT
 End Function
 
 ' Delete a specific sender's emails from Inbox.
@@ -981,7 +1513,8 @@ Public Function DeleteSenderFromInbox(ByVal senderEmail As String) As Long
     Dim deletedCount As Long
     Dim itemEmail As String
 
-    On Error GoTo ErrorHandler
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.DeleteSenderFromInbox"
 
     Set inbox = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox)
     Set myItems = inbox.Items
@@ -1001,11 +1534,14 @@ Public Function DeleteSenderFromInbox(ByVal senderEmail As String) As Long
     Next i
 
     DeleteSenderFromInbox = deletedCount
-    Exit Function
 
-ErrorHandler:
-    LogMessage "ERROR", "DeleteSenderFromInbox error: " & Err.Description
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "Utilities", "DeleteSenderFromInbox", Err.Number, Err.Description
     DeleteSenderFromInbox = deletedCount
+    Resume PROC_EXIT
 End Function
 
 ' Return the number of learned sender rules in cache
@@ -1602,6 +2138,135 @@ FileError:
     LogMessage "ERROR", "DeleteLearnedSenderRule file write failed: " & Err.Description
 End Sub
 
+'-------------------------------------------------------------------------------
+' LEARNED REPLIES - FILE I/O
+'-------------------------------------------------------------------------------
+' Reply pairs are stored as pipe-delimited records in learned_replies.txt:
+'   original_subject|original_from|original_body_snippet|reply_body_snippet|timestamp
+' Subjects/bodies are sanitized via SanitizeSubject before writing.
+
+' Build the full path to the learned replies file
+Public Function GetLearnedRepliesFilePath() As String
+    Dim folderPath As String
+    Dim fso As Object
+
+    folderPath = Environ("APPDATA") & "\" & LEARNED_DATA_FOLDER
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(folderPath) Then
+        fso.CreateFolder folderPath
+    End If
+    Set fso = Nothing
+
+    GetLearnedRepliesFilePath = folderPath & "\" & LEARNED_REPLIES_FILE
+End Function
+
+' Sanitize a text snippet for pipe-delimited file storage.
+' Strips newlines, pipes, and null chars (same rules as SanitizeSubject).
+Private Function SanitizeSnippet(ByVal text As String, ByVal maxLen As Integer) As String
+    Dim result As String
+    result = Left(text, maxLen)
+    result = Replace(result, vbCrLf, " ")
+    result = Replace(result, vbCr, " ")
+    result = Replace(result, vbLf, " ")
+    result = Replace(result, "|", " ")
+    result = Replace(result, Chr(0), "")
+    SanitizeSnippet = Trim(result)
+End Function
+
+' Record a reply pair to learned_replies.txt (append-only)
+Public Sub RecordLearnedReply(ByVal originalSubject As String, _
+                               ByVal originalFrom As String, _
+                               ByVal originalBodySnippet As String, _
+                               ByVal replyBodySnippet As String)
+    Dim filePath As String
+    Dim fso As Object
+    Dim ts As Object
+    Dim timestamp As String
+
+    filePath = GetLearnedRepliesFilePath()
+    timestamp = Format(Now, "yyyy-mm-dd hh:nn:ss")
+
+    Dim safeSubject As String
+    Dim safeFrom As String
+    Dim safeOrigBody As String
+    Dim safeReplyBody As String
+
+    safeSubject = SanitizeSubject(originalSubject)
+    safeFrom = SanitizeSnippet(originalFrom, 200)
+    safeOrigBody = SanitizeSnippet(originalBodySnippet, 500)
+    safeReplyBody = SanitizeSnippet(replyBodySnippet, 1000)
+
+    On Error GoTo FileError
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Set ts = fso.OpenTextFile(filePath, 8, True)  ' 8 = ForAppending, create if missing
+    ts.WriteLine safeSubject & "|" & safeFrom & "|" & safeOrigBody & "|" & safeReplyBody & "|" & timestamp
+    ts.Close
+    Set ts = Nothing
+    Set fso = Nothing
+    On Error GoTo 0
+
+    LogMessage "INFO", "Learned reply recorded for: " & Left(safeSubject, 50)
+    Exit Sub
+
+FileError:
+    If Not ts Is Nothing Then
+        On Error Resume Next
+        ts.Close
+        On Error GoTo 0
+    End If
+    Set ts = Nothing
+    Set fso = Nothing
+    LogMessage "ERROR", "RecordLearnedReply file write failed: " & Err.Description
+End Sub
+
+' Load the most recent N reply pairs from learned_replies.txt.
+' Returns a Collection of pipe-delimited strings (raw lines).
+Public Function LoadRecentReplyPairs(ByVal maxPairs As Integer) As Collection
+    Dim result As Collection
+    Set result = New Collection
+
+    Dim filePath As String
+    filePath = GetLearnedRepliesFilePath()
+
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(filePath) Then
+        Set fso = Nothing
+        Set LoadRecentReplyPairs = result
+        Exit Function
+    End If
+
+    ' Read all lines, keep last maxPairs
+    Dim allLines As Collection
+    Set allLines = New Collection
+
+    Dim ts As Object
+    Dim line As String
+    Set ts = fso.OpenTextFile(filePath, 1)  ' ForReading
+    Do While Not ts.AtEndOfStream
+        line = Trim(ts.ReadLine)
+        If Len(line) > 0 And Left(line, 1) <> "#" Then
+            allLines.Add line
+        End If
+    Loop
+    ts.Close
+    Set ts = Nothing
+    Set fso = Nothing
+
+    ' Return the last maxPairs lines
+    Dim startIdx As Long
+    startIdx = allLines.Count - maxPairs + 1
+    If startIdx < 1 Then startIdx = 1
+
+    Dim i As Long
+    For i = startIdx To allLines.Count
+        result.Add allLines(i)
+    Next i
+
+    Set LoadRecentReplyPairs = result
+End Function
+
 ' Delete a single learned subject rule from both cache and file.
 ' Uses read-all -> filter -> write-all approach.
 Public Sub DeleteLearnedSubjectRule(ByVal subject As String)
@@ -1677,3 +2342,514 @@ FileError2:
     Set fso = Nothing
     LogMessage "ERROR", "DeleteLearnedSubjectRule file write failed: " & Err.Description
 End Sub
+
+'===============================================================================
+' WEB UI COMMAND BRIDGE HELPERS (v3.0)
+' Support for file-based IPC with the Python Flask Web UI.
+' Commands are JSON files in %APPDATA%\OutlookEmailFilter\commands\
+'===============================================================================
+
+' Return path to the commands directory (auto-creates it)
+Public Function GetCommandsDir() As String
+    Dim dir As String
+    dir = Environ("APPDATA") & "\OutlookEmailFilter\commands"
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(dir) Then
+        On Error Resume Next
+        fso.CreateFolder dir
+        On Error GoTo 0
+    End If
+    Set fso = Nothing
+    GetCommandsDir = dir
+End Function
+
+' Write a result JSON file for a completed command
+' status: "ok" or "error"; output: text to return to the Web UI
+Public Sub WriteResultFile(ByVal cmdId As String, ByVal status As String, ByVal output As String)
+    Dim stm As Object
+    Dim resultPath As String
+    Dim jsonLine As String
+
+    ' Sanitize output for JSON embedding (escape all JSON-unsafe characters)
+    Dim safe As String
+    safe = Replace(output, "\", "\\")
+    safe = Replace(safe, """", "\""")
+    safe = Replace(safe, vbCrLf, "\n")
+    safe = Replace(safe, vbCr, "\n")
+    safe = Replace(safe, vbLf, "\n")
+    safe = Replace(safe, vbTab, "\t")
+    safe = Replace(safe, Chr(8), "")    ' backspace
+    safe = Replace(safe, Chr(12), "")   ' form feed
+    safe = Replace(safe, Chr(0), "")
+
+    resultPath = GetCommandsDir() & "\" & cmdId & ".result"
+    jsonLine = "{""id"":""" & cmdId & """,""status"":""" & status & """,""output"":""" & safe & """}"
+
+    On Error Resume Next
+    Set stm = CreateObject("ADODB.Stream")
+    stm.Type = 2            ' adTypeText
+    stm.Charset = "utf-8"
+    stm.Open
+    stm.WriteText jsonLine
+    stm.SaveToFile resultPath, 2  ' adSaveCreateOverWrite
+    stm.Close
+    On Error GoTo 0
+    Set stm = Nothing
+End Sub
+
+' ---------------------------------------------------------------------------
+' WEB UI COMMAND POLLER
+' Uses Windows API SetTimer/KillTimer because Outlook VBA does NOT support
+' Application.OnTime (that is Excel/Word only).
+' ---------------------------------------------------------------------------
+
+Public Sub StartCommandPollerStd()
+    If pollerRunningFlag Then Exit Sub
+    pollerRunningFlag = True
+    pollerTimerId = SetTimer(0, 0, 2000, AddressOf PollerCallback)
+    If pollerTimerId = 0 Then
+        pollerRunningFlag = False
+        LogMessage "ERROR", "Failed to start command poller timer"
+    Else
+        LogMessage "INFO", "Web UI command poller started (timer ID: " & pollerTimerId & ")"
+    End If
+End Sub
+
+Public Sub StopCommandPollerStd()
+    If Not pollerRunningFlag Then Exit Sub
+    pollerRunningFlag = False
+    If pollerTimerId <> 0 Then
+        KillTimer 0, pollerTimerId
+        pollerTimerId = 0
+    End If
+    LogMessage "INFO", "Web UI command poller stopped"
+End Sub
+
+#If VBA7 Then
+Private Sub PollerCallback(ByVal hWnd As LongPtr, ByVal uMsg As Long, _
+                           ByVal nIDEvent As LongPtr, ByVal dwTime As Long)
+#Else
+Private Sub PollerCallback(ByVal hWnd As Long, ByVal uMsg As Long, _
+                           ByVal nIDEvent As Long, ByVal dwTime As Long)
+#End If
+    On Error Resume Next
+    PollForCommandsTimer
+    On Error GoTo 0
+End Sub
+
+Public Sub PollForCommandsTimer()
+    If Not pollerRunningFlag Then Exit Sub
+
+    Dim fso As Object
+    Dim folder As Object
+    Dim file As Object
+    Dim cmdDir As String
+    Dim cmdId As String
+    Dim macroName As String
+    Dim output As String
+    Dim ts As Object
+    Dim content As String
+    Dim status As String
+
+    cmdDir = GetCommandsDir()
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(cmdDir) Then
+        Set fso = Nothing
+        GoTo Reschedule
+    End If
+
+    Set folder = fso.GetFolder(cmdDir)
+
+    For Each file In folder.Files
+        If LCase(fso.GetExtensionName(file.Name)) = "json" Then
+            cmdId = fso.GetBaseName(file.Name)
+
+            On Error Resume Next
+            Set ts = fso.OpenTextFile(file.Path, 1)
+            If Err.Number <> 0 Then
+                On Error GoTo 0
+                GoTo NextFile
+            End If
+            content = ts.ReadAll
+            ts.Close
+            Set ts = Nothing
+            On Error GoTo 0
+
+            On Error Resume Next
+            fso.DeleteFile file.Path
+            On Error GoTo 0
+
+            macroName = ExtractJsonStringStd(content, "macro")
+            If Len(macroName) = 0 Then
+                WriteResultFile cmdId, "error", "Could not parse macro name from command"
+                GoTo NextFile
+            End If
+
+            output = DispatchMacroStd(macroName, content)
+            status = "ok"
+            If Left(output, 6) = "ERROR:" Then status = "error"
+
+            WriteResultFile cmdId, status, output
+        End If
+NextFile:
+    Next file
+
+    Set fso = Nothing
+
+Reschedule:
+    ' No rescheduling needed — Windows API SetTimer repeats automatically
+End Sub
+
+Private Function ExtractJsonStringStd(ByVal json As String, ByVal key As String) As String
+    Dim pos As Long
+    Dim valueStart As Long
+    Dim valueEnd As Long
+
+    ' Try "key":"value" first (compact JSON)
+    Dim searchKey As String
+    searchKey = """" & key & """:"""
+    pos = InStr(1, json, searchKey, vbTextCompare)
+    If pos > 0 Then
+        valueStart = pos + Len(searchKey)
+    Else
+        ' Try "key": "value" (Python json.dump default — space after colon)
+        searchKey = """" & key & """: """
+        pos = InStr(1, json, searchKey, vbTextCompare)
+        If pos > 0 Then
+            valueStart = pos + Len(searchKey)
+        Else
+            ExtractJsonStringStd = ""
+            Exit Function
+        End If
+    End If
+
+    valueEnd = InStr(valueStart, json, """")
+    If valueEnd = 0 Then
+        ExtractJsonStringStd = ""
+        Exit Function
+    End If
+
+    ExtractJsonStringStd = Mid(json, valueStart, valueEnd - valueStart)
+End Function
+
+Private Function DispatchMacroStd(ByVal macroName As String, Optional ByVal rawJson As String = "") As String
+    Dim result As String
+
+    On Error GoTo DispatchError
+
+    Select Case macroName
+        Case "FilterExistingDryRun"
+            result = CaptureFilterDryRunStd()
+
+        Case "FilterExistingEmails"
+            FilterExistingEmails
+            result = "FilterExistingEmails completed."
+
+        Case "ShowVersionInfo"
+            result = BuildVersionInfoStd()
+
+        Case "ReinitializeFilter"
+            ' Cannot use Application.Run from timer callback context, so call
+            ' the reinitialization logic directly from this standard module.
+            LoadAllSettings
+            LoadLearnedSenders True   ' forceReload
+            LoadLearnedSubjects True  ' forceReload
+            result = "Settings and learned rules reloaded."
+
+        Case "ScanSentForReplyPatterns"
+            EmailAgent.ScanSentForReplyPatterns
+            result = "Sent items scan complete."
+
+        Case "DraftRepliesForInbox"
+            EmailAgent.DraftRepliesForInbox
+            result = "Draft replies complete."
+
+        Case "ShowLearnedSenders"
+            result = "Learned sender rules: " & GetLearnedSendersCount() & vbCrLf & _
+                     "File: " & GetLearnedSendersFilePath()
+
+        Case "ShowLearnedSendersList"
+            ShowLearnedSendersList
+            result = "Sender rules dumped to VBA Immediate Window (" & GetLearnedSendersCount() & " unique rules)."
+
+        Case "CleanLearnedSendersFile"
+            DeduplicateLearnedSenders
+            result = "Learned senders deduplicated. Unique rules: " & GetLearnedSendersCount()
+
+        Case "ShowLearnedSubjectsList"
+            ShowLearnedSubjectsList
+            result = "Subject rules dumped to VBA Immediate Window (" & GetLearnedSubjectsCount() & " unique rules)."
+
+        Case "CleanLearnedSubjectsFile"
+            DeduplicateLearnedSubjects
+            result = "Learned subjects deduplicated. Unique rules: " & GetLearnedSubjectsCount()
+
+        Case "ImportExistingLearnedFolders"
+            ImportExistingLearnedFolders
+            result = "Learned folder import complete."
+
+        Case "ImportExistingLearnedSubjectFolder"
+            ImportExistingLearnedSubjectFolder
+            result = "Learned subject folder import complete."
+
+        Case "ImportServerRules"
+            ImportServerRules
+            result = "Server rule import complete."
+
+        Case "ExportLearnedRulesToServer"
+            ExportLearnedRulesToServer
+            result = "Server rule export complete."
+
+        Case "RestoreFromReview"
+            RestoreFromReview
+            result = "Restore from Review complete."
+
+        Case "RestoreDeletedKeepEmails"
+            RestoreDeletedKeepEmails
+            result = "Restore deleted KEEP emails complete."
+
+        Case "GenerateAddressingPatterns"
+            EmailAgent.GenerateAddressingPatterns
+            result = "Addressing patterns generated."
+
+        Case "GenerateClassificationReport"
+            GenerateClassificationReport
+            result = "Classification report shown."
+
+        Case "SummarizeSelectedEmail"
+            result = SummarizeSelectedEmailStd()
+
+        Case "DraftReplyToSelected"
+            result = DraftReplyToSelectedStd()
+
+        Case "FilterAllFolders"
+            FilterAllFolders
+            result = "FilterAllFolders completed."
+
+        Case "FilterSelectedEmail"
+            FilterSelectedEmail
+            result = "FilterSelectedEmail completed — check Outlook for prompt."
+
+        Case "FilterSelectedEmails"
+            FilterSelectedEmails
+            result = "FilterSelectedEmails completed."
+
+        Case "FilterCurrentFolder"
+            FilterCurrentFolder
+            result = "FilterCurrentFolder completed."
+
+        Case "FilterLastNDays"
+            Dim daysArg As String
+            daysArg = ExtractJsonStringStd(rawJson, "days")
+            If Len(daysArg) > 0 And IsNumeric(daysArg) Then
+                FilterLastNDays CInt(daysArg)
+            Else
+                FilterLastNDays 7
+            End If
+            result = "FilterLastNDays completed."
+
+        Case "BulkDeleteBySender"
+            Dim patternArg As String
+            patternArg = ExtractJsonStringStd(rawJson, "pattern")
+            If Len(patternArg) > 0 Then
+                BulkDeleteBySender patternArg
+                result = "BulkDeleteBySender completed for: " & patternArg
+            Else
+                result = "ERROR: BulkDeleteBySender requires a sender pattern argument."
+            End If
+
+        Case "MoveProtectedSources"
+            MoveProtectedSources
+            result = "MoveProtectedSources completed."
+
+        Case "ShowLearnedRepliesSummary"
+            EmailAgent.ShowLearnedRepliesSummary
+            result = "Learned reply summary shown — check Outlook."
+
+        Case "ReloadLearnedSenders"
+            ReloadLearnedSenders
+            result = "Learned senders reloaded. Count: " & GetLearnedSendersCount()
+
+        Case "DetectAndMigrateOldFolders"
+            DetectAndMigrateOldFolders
+            result = "Old folder migration complete."
+
+        Case "EnableRealTimeFilter"
+            ' Requires WithEvents setup in ThisOutlookSession — cannot run from bridge.
+            result = "Cannot run from Web UI. In VBA Immediate Window (Ctrl+G), type:" & vbCrLf & _
+                     "  ThisOutlookSession.EnableRealTimeFilter"
+
+        Case "DisableRealTimeFilter"
+            result = "Cannot run from Web UI. In VBA Immediate Window (Ctrl+G), type:" & vbCrLf & _
+                     "  ThisOutlookSession.DisableRealTimeFilter"
+
+        Case Else
+            result = "ERROR: Unknown macro: " & macroName
+
+    End Select
+
+    DispatchMacroStd = result
+    Exit Function
+
+DispatchError:
+    DispatchMacroStd = "ERROR: " & macroName & " failed: " & Err.Description
+End Function
+
+Private Function BuildVersionInfoStd() As String
+    Dim info As String
+    info = "Email Agent v" & FILTER_VERSION & " (" & FILTER_VERSION_DATE & ")" & vbCrLf
+    info = info & "Settings: " & GetSettingsFilePath() & vbCrLf
+    info = info & "Learned senders: " & GetLearnedSendersCount() & vbCrLf
+    info = info & "Learned subjects: " & GetLearnedSubjectsCount() & vbCrLf
+    info = info & "LLM: " & IIf(RuntimeUseLLM, "ON (" & RuntimeLLMProvider & ")", "OFF") & vbCrLf
+    info = info & "Self-improving: " & IIf(RuntimeEnableSelfImproving, "ON", "OFF") & vbCrLf
+    info = info & "Auto-reply: " & IIf(RuntimeEnableAutoReply, "ON", "OFF")
+    BuildVersionInfoStd = info
+End Function
+
+Private Function CaptureFilterDryRunStd() As String
+    Dim myFolder As Outlook.Folder
+    Dim myItems As Outlook.Items
+    Dim mail As Outlook.MailItem
+    Dim i As Long
+    Dim output As String
+    Dim decision As String
+    Dim icon As String
+    Dim processCount As Long
+
+    Set myFolder = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox)
+    Set myItems = myFolder.Items
+    myItems.Sort "[ReceivedTime]", True
+
+    output = "DRY RUN - First " & RuntimeDryRunLimit & " emails:" & vbCrLf
+    processCount = 0
+
+    For i = 1 To myItems.Count
+        If processCount >= RuntimeDryRunLimit Then Exit For
+        If TypeOf myItems(i) Is Outlook.MailItem Then
+            Set mail = myItems(i)
+            processCount = processCount + 1
+            decision = ClassifyEmail(mail)
+            Select Case decision
+                Case "DELETE"
+                    icon = IIf(lastClassifyWasLearned, "[xLR]", IIf(lastClassifyWasLearnedSubject, "[xLS]", "[DEL]"))
+                Case "MOVE_II": icon = "[II] "
+                Case "LLM_REVIEW": icon = "[???]"
+                Case "KEEP": icon = IIf(lastClassifyWasLearned, "[+LR]", "[OK] ")
+                Case Else: icon = "[???]"
+            End Select
+            output = output & icon & " " & Format(mail.ReceivedTime, "mm/dd hh:nn") & " | " & _
+                     Truncate(mail.SenderName, 20) & " | " & Truncate(mail.Subject, 40) & vbCrLf
+        End If
+    Next i
+
+    output = output & vbCrLf & "Total: " & processCount & " emails previewed."
+    CaptureFilterDryRunStd = output
+End Function
+
+' Bridge-friendly SummarizeSelectedEmail — returns result string instead of MsgBox
+Private Function SummarizeSelectedEmailStd() As String
+    On Error GoTo StdErr
+    Dim mail As Outlook.MailItem
+    Dim prompt As String
+    Dim summary As String
+    Dim systemPrompt As String
+
+    If Not RuntimeUseLLM Then
+        SummarizeSelectedEmailStd = "ERROR: LLM is not enabled. Set UseLLMAPI=True in settings."
+        Exit Function
+    End If
+
+    If Application.ActiveExplorer.Selection.Count = 0 Then
+        SummarizeSelectedEmailStd = "ERROR: No email selected. Please select an email in Outlook first."
+        Exit Function
+    End If
+
+    If Not TypeOf Application.ActiveExplorer.Selection(1) Is Outlook.MailItem Then
+        SummarizeSelectedEmailStd = "ERROR: Selected item is not an email."
+        Exit Function
+    End If
+
+    Set mail = Application.ActiveExplorer.Selection(1)
+
+    systemPrompt = "You are a helpful assistant. Summarize the following email concisely in 2-3 bullet points. " & _
+                   "Focus on: who sent it, what they want, and any action required."
+
+    prompt = "Summarize this email:" & vbCrLf & _
+             "From: " & mail.SenderName & " <" & GetSenderEmail(mail) & ">" & vbCrLf & _
+             "Subject: " & mail.Subject & vbCrLf & _
+             "Date: " & Format(mail.ReceivedTime, "yyyy-mm-dd hh:nn") & vbCrLf & _
+             "Body:" & vbCrLf & Truncate(mail.Body, 2000)
+
+    summary = CallLLM(prompt, systemPrompt, RuntimeSummarizeMaxTokens)
+
+    If Len(summary) = 0 Then
+        SummarizeSelectedEmailStd = "ERROR: LLM returned no response. Check your API configuration."
+        Exit Function
+    End If
+
+    SummarizeSelectedEmailStd = "Summary of: " & mail.Subject & vbCrLf & vbCrLf & summary
+    Exit Function
+StdErr:
+    SummarizeSelectedEmailStd = "ERROR: SummarizeSelectedEmail failed: " & Err.Description
+End Function
+
+' Bridge-friendly DraftReplyToSelected — returns result string, saves draft, no MsgBox
+Private Function DraftReplyToSelectedStd() As String
+    On Error GoTo StdErr
+    Dim mail As Outlook.MailItem
+    Dim replyItem As Outlook.MailItem
+    Dim prompt As String
+    Dim draft As String
+    Dim systemPrompt As String
+    Dim sSubject As String
+
+    If Not RuntimeUseLLM Then
+        DraftReplyToSelectedStd = "ERROR: LLM is not enabled. Set UseLLMAPI=True in settings."
+        Exit Function
+    End If
+
+    If Application.ActiveExplorer.Selection.Count = 0 Then
+        DraftReplyToSelectedStd = "ERROR: No email selected. Please select an email in Outlook first."
+        Exit Function
+    End If
+
+    If Not TypeOf Application.ActiveExplorer.Selection(1) Is Outlook.MailItem Then
+        DraftReplyToSelectedStd = "ERROR: Selected item is not an email."
+        Exit Function
+    End If
+
+    Set mail = Application.ActiveExplorer.Selection(1)
+    sSubject = mail.Subject
+
+    systemPrompt = "You are Professor Xu Xin at PolyU Hong Kong. Draft a professional, concise reply to the following email. " & _
+                   "Be polite and to the point. If the email requires a specific action, acknowledge it. " & _
+                   "Do not include a subject line in your reply."
+
+    prompt = "Draft a reply to this email:" & vbCrLf & _
+             "From: " & mail.SenderName & " <" & GetSenderEmail(mail) & ">" & vbCrLf & _
+             "Subject: " & sSubject & vbCrLf & _
+             "Date: " & Format(mail.ReceivedTime, "yyyy-mm-dd hh:nn") & vbCrLf & _
+             "Body:" & vbCrLf & Truncate(mail.Body, 2000)
+
+    draft = CallLLM(prompt, systemPrompt, RuntimeReplyMaxTokens, RuntimeReplyTemperature)
+
+    If Len(draft) = 0 Then
+        DraftReplyToSelectedStd = "ERROR: LLM returned no response. Check your API configuration."
+        Exit Function
+    End If
+
+    ' Save as actual draft in Outlook Drafts folder
+    Set replyItem = mail.Reply
+    replyItem.Body = draft & vbCrLf & vbCrLf & replyItem.Body
+    replyItem.Save
+    Set replyItem = Nothing
+
+    LogMessage "INFO", "Draft reply saved to Drafts for: " & Left(sSubject, 50)
+    DraftReplyToSelectedStd = "Draft reply saved to Drafts for: " & sSubject & vbCrLf & vbCrLf & draft
+    Exit Function
+StdErr:
+    DraftReplyToSelectedStd = "ERROR: DraftReplyToSelected failed: " & Err.Description
+End Function

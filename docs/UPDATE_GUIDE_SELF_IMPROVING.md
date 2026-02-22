@@ -1,232 +1,72 @@
-# Outlook Email Filter — Self-Improving Update Guide
+# Update Guide: Self-Improving Filter
 
-## What This Update Adds
+> **Historical document** — This guide covers the upgrade to the self-improving feature (originally v1.x → v2.0-era).
+> If you are doing a **fresh install or upgrading to v3.0**, use [INSTALL.md](INSTALL.md) instead.
 
-The filter now **learns from your manual sorting**. When you drag an email into folder **III** (keep) or **IIII** (delete), the sender is remembered permanently. Future emails from that sender are classified at **Rule 0** — the highest priority — overriding all static patterns in Config.bas.
+---
 
-Additionally, **two new quick-filter macros** are available for one-click filtering:
+## What This Feature Adds
+
+The self-improving filter **learns from your manual sorting**. When you drag an email into the **LearnKeep** (always keep) or **LearnDelete** (always delete) folder, the sender is remembered permanently. Future emails from that sender are classified at **Rule 0** — the highest priority — overriding all static patterns.
+
+**Additional macros:**
 - **`FilterSelectedEmails`** — classify and act on selected emails
 - **`FilterCurrentFolder`** — classify and act on all emails in the current folder
 
-These can be added to the Quick Access Toolbar (File → Options → Quick Access Toolbar → Macros) for toolbar-button access.
+---
+
+## Installing / Upgrading
+
+1. Open VBA Editor (Alt+F11) → File → Import File → import each `.bas` file from `src/`
+2. Paste `src/ThisOutlookSession.bas` into the built-in ThisOutlookSession module
+3. Compile (Debug → Compile Project) → Save (Ctrl+S) → Restart Outlook
+
+For full details, see [INSTALL.md](INSTALL.md) Part 2.
 
 ---
 
-## Pre-Update Checklist
+## One-Time Backfill
 
-- [ ] Outlook is open
-- [ ] You can access the VBA Editor (Alt+F11)
-- [ ] Folders **III** and **IIII** already exist under Inbox (they are not auto-created)
+If you already have emails in your learning folders and want to bulk-import all their senders:
 
----
+1. Open Immediate Window (Ctrl+G)
+2. Type: `ImportExistingLearnedFolders`
 
-## Step 1: Open VBA Editor
-
-Press **Alt + F11** in Outlook.
+This scans the LearnKeep and LearnDelete folders and records all senders as learned rules. Run this **once** after the first install. After this, new drags are captured automatically.
 
 ---
 
-## Step 2: Remove Old Modules
-
-In the **Project Explorer** panel (left side), expand **Modules**. For each of these four modules, do:
-
-1. Right-click the module name → **Remove [ModuleName]...**
-2. When asked **"Do you want to export the file before removing it?"** → click **No**
-
-Remove in this order:
-- [ ] **Config**
-- [ ] **Utilities**
-- [ ] **EmailFilter**
-- [ ] **BatchFilter**
-
-> After removal, only **ThisOutlookSession** should remain (under Microsoft Outlook Objects).
-
----
-
-## Step 3: Import Updated Modules
-
-1. Go to **File → Import File...**
-2. Navigate to `outlook-email-filter/src/`
-3. Import these four files, one at a time:
-
-- [ ] `Config.bas`
-- [ ] `Utilities.bas`
-- [ ] `EmailFilter.bas`
-- [ ] `BatchFilter.bas`
-
-Your Modules folder should now show all four again.
-
----
-
-## Step 4: Update ThisOutlookSession
-
-This module **cannot** be imported — it must be copy-pasted.
-
-1. In Project Explorer, find **ThisOutlookSession** under **Microsoft Outlook Objects**
-2. Double-click to open it
-3. Press **Ctrl + A** to select all existing code
-4. Press **Delete** to clear it
-5. Open the file `src/ThisOutlookSession.bas` in a text editor (Notepad is fine)
-6. Copy **everything below the header comment block** (starting from `Option Explicit`)
-7. Paste into the ThisOutlookSession code window in VBA Editor
-
----
-
-## Step 5: Verify Project Structure
-
-Your Project Explorer should look like:
-
-```
-VBAProject (filename.otm)
-├── Microsoft Outlook Objects
-│   └── ThisOutlookSession    ← updated (with learning event handlers)
-└── Modules
-    ├── Config                ← updated (5 new constants)
-    ├── Utilities             ← updated (learned senders cache + file I/O)
-    ├── EmailFilter           ← updated (Rule 0 insertion)
-    └── BatchFilter           ← updated (new icons + 2 new macros)
-```
-
----
-
-## Step 6: Compile and Save
-
-1. Go to **Debug → Compile Project** in the VBA Editor menu bar
-   - If there are errors, check that all 4 modules imported correctly
-   - Common issue: a module imported twice (e.g., "Config1") — remove the duplicate
-2. Press **Ctrl + S** to save
-
----
-
-## Step 7: Restart Outlook
-
-1. **Close Outlook completely** (check the system tray — make sure it's fully closed)
-2. **Reopen Outlook**
-
-On startup, `Application_Startup` will:
-- Connect the inbox watcher (same as before)
-- Look for III and IIII folders under Inbox
-- If found: attach learning watchers and load the learned senders cache
-- If not found: log a warning, self-improving feature stays inactive
-
----
-
-## Step 8: Import Existing Emails (One-Time)
-
-Your III and IIII folders already have emails in them. This one-time macro reads every email in both folders and records all senders as learned rules.
-
-1. Open VBA Editor (**Alt + F11**)
-2. Open the Immediate Window (**Ctrl + G**)
-3. Type and press Enter:
-
-```
-ImportExistingLearnedFolders
-```
-
-4. A dialog will show results like:
-
-```
-From 'III': 12 senders → KEEP
-From 'IIII': 8 senders → DELETE
-Total unique rules now: 18
-```
-
-> You only need to run this **once**. After this, new drags into III/IIII are captured automatically by the event handlers.
-
----
-
-## Step 9: Verify Everything Works
-
-### Test 1: Check learned rules loaded
-
-In the Immediate Window, type:
-
-```
-ShowLearnedSenders
-```
-
-You should see the rule count matching what `ImportExistingLearnedFolders` reported, plus the file path (`%APPDATA%\OutlookEmailFilter\learned_senders.txt`).
-
-### Test 2: Dry run with learned rule icons
-
-```
-FilterExistingDryRun
-```
-
-Check the Immediate Window output. Look for:
-- **`[+LR]`** — emails kept because of a learned rule (sender was in III)
-- **`[xLR]`** — emails deleted because of a learned rule (sender was in IIII)
-- **`[DEL]`**, **`[OK]`**, **`[II]`**, **`[???]`** — regular rules (unchanged)
-
-### Test 3: Live learning
-
-1. Find any email in your Inbox
-2. **Drag it into III**
-3. Check the Immediate Window — you should see:
-   ```
-   LEARNED KEEP from folder III: sender@example.com (Sender Name)
-   ```
-4. Run `FilterExistingDryRun` again — that sender's emails should now show `[+LR]`
-
----
-
-## New Macros Reference
-
-| Macro | When to Use |
-|-------|-------------|
-| `ImportExistingLearnedFolders` | **Once** after this upgrade — backfills from existing III/IIII emails |
-| `ShowLearnedSenders` | Anytime — check how many rules are loaded and where the file is |
-| `ReloadLearnedSenders` | After manually editing the `.txt` file — forces cache refresh |
-
----
-
-## How It Works Going Forward
+## How It Works Day-to-Day
 
 | You do this... | The filter does this... |
 |----------------|------------------------|
-| Drag email → **III** | Records sender as **always KEEP** |
-| Drag email → **IIII** | Records sender as **always DELETE** |
-| Change your mind | Drag another email from that sender into the opposite folder — new rule overwrites |
-| Restart Outlook | All rules reload automatically from the text file |
+| Drag email → **LearnKeep** | Records sender as **always KEEP** |
+| Drag email → **LearnDelete** | Records sender as **always DELETE** |
+| Change your mind | Drag another email from that sender to the opposite folder — new rule overwrites |
+| Restart Outlook | All rules reload from file automatically |
+
+---
+
+## Verification
+
+In the Immediate Window:
+
+```
+ShowLearnedSenders          ' check rule count and file path
+FilterExistingDryRun        ' look for [+LR] and [xLR] icons
+```
+
+| Icon | Meaning |
+|------|---------|
+| `[+LR]` | Kept by learned sender rule |
+| `[xLR]` | Deleted by learned sender rule |
 
 ---
 
 ## Troubleshooting
 
-### "Self-improving filter not active" in log
+**"Self-improving filter not active" in log**: The learning folders are missing or their names don't match what's in `settings.ini` under `[Folders]`. Check that `LearnKeep` and `LearnDelete` exist directly under Inbox.
 
-The III or IIII folder is missing or misspelled. Check:
-- Both folders exist **directly under Inbox** (not nested deeper)
-- Names are exactly **III** (3 letters) and **IIII** (4 letters)
+**No `[+LR]`/`[xLR]` icons in dry run**: Run `ShowLearnedSenders` to check count. If 0, run `ImportExistingLearnedFolders`. If count > 0 but no icons, those learned senders may not have emails in the current Inbox.
 
-### No `[+LR]`/`[xLR]` icons in dry run
-
-- Run `ShowLearnedSenders` to check if rules loaded (count > 0)
-- If count is 0, run `ImportExistingLearnedFolders` first
-- If count > 0 but no icons, the learned senders may not match any Inbox emails
-
-### Compile error on import
-
-- Go to **Debug → Compile Project**
-- Check for duplicate modules (e.g., "Config1" alongside "Config") — remove the duplicate
-- Check **Tools → References** — uncheck anything marked "MISSING"
-
-### Want to start fresh
-
-Delete the file at the path shown by `ShowLearnedSenders` and run `ReloadLearnedSenders`. This clears all learned rules.
-
----
-
-## Files Changed in This Update
-
-| File | What Changed |
-|------|-------------|
-| `src/Config.bas` | +5 self-improving constants |
-| `src/Utilities.bas` | +learned senders cache, file I/O (6 functions), updated FormatStats |
-| `src/EmailFilter.bas` | +Rule 0 block, +lastClassifyWasLearned flag |
-| `src/BatchFilter.bas` | +`[+LR]`/`[xLR]` dry-run icons, +learned count in report, +ShowLearnedSenders, +ImportExistingLearnedFolders |
-| `src/ThisOutlookSession.bas` | +WithEvents for III/IIII, +learning event handlers, updated startup (no auto-create), updated DisableRealTimeFilter |
-| `CLAUDE.md` | Updated architecture, rules, macros, dev notes |
-| `README.md` | Updated features, rules table, macros, +self-improving section |
-| `docs/INSTALL.md` | Updated folder creation, macros table |
-| `docs/PATTERNS.md` | Updated priority list, +learned rules section |
+**Want to start fresh**: Delete `%APPDATA%\OutlookEmailFilter\learned_senders.txt` and run `ReloadLearnedSenders`.

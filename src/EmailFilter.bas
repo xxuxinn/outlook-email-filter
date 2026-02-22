@@ -1,8 +1,8 @@
 '===============================================================================
-' EmailFilter.bas - Main Classification Logic v2.0
+' EmailFilter.bas - Main Classification Logic v3.0
 '===============================================================================
 ' This module contains the core email classification functions,
-' LLM integration, and LLM-powered email tools (summarize, draft reply).
+' LLM integration (via multi-provider CallLLM), and LLM email tools.
 '
 ' All pattern/setting references use Runtime* variables from Config.bas,
 ' loaded from settings.ini by LoadAllSettings at startup.
@@ -29,7 +29,8 @@ Public Function ClassifyEmail(ByVal mail As Outlook.MailItem) As String
     Dim bodyStart As String
     Dim domain As String
 
-    On Error GoTo ErrorHandler
+    On Error GoTo PROC_ERR
+    PushCallStack "EmailFilter.ClassifyEmail"
 
     ' Extract email properties
     senderEmail = GetSenderEmail(mail)
@@ -166,11 +167,14 @@ Public Function ClassifyEmail(ByVal mail As Outlook.MailItem) As String
     ' =========================================================================
     ClassifyEmail = "LLM_REVIEW"
     LogMessage "DEBUG", "  -> LLM_REVIEW (no rule matched)"
-    Exit Function
 
-ErrorHandler:
-    LogMessage "ERROR", "ClassifyEmail error: " & Err.Description
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "EmailFilter", "ClassifyEmail", Err.Number, Err.Description
     ClassifyEmail = "KEEP"  ' Safe default: keep on error
+    Resume PROC_EXIT
 End Function
 
 '-------------------------------------------------------------------------------
@@ -235,7 +239,8 @@ End Function
 
 ' Execute the classification decision on an email
 Public Sub ExecuteAction(ByVal mail As Outlook.MailItem, ByVal decision As String, Optional ByVal stats As Object = Nothing)
-    On Error GoTo ErrorHandler
+    On Error GoTo PROC_ERR
+    PushCallStack "EmailFilter.ExecuteAction"
 
     ' Capture email info BEFORE any action (mail object becomes invalid after delete/move)
     Dim senderName As String
@@ -283,11 +288,13 @@ Public Sub ExecuteAction(ByVal mail As Outlook.MailItem, ByVal decision As Strin
             If Not stats Is Nothing Then IncrementStat stats, "KEEP"
     End Select
 
+PROC_EXIT:
+    PopCallStack
     Exit Sub
-
-ErrorHandler:
-    LogMessage "ERROR", "ExecuteAction error: " & Err.Description & " | Subject: " & subject
+PROC_ERR:
+    LogError "EmailFilter", "ExecuteAction", Err.Number, Err.Description
     If Not stats Is Nothing Then IncrementStat stats, "ERROR"
+    Resume PROC_EXIT
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -304,16 +311,19 @@ Private Function ProcessAmbiguousEmail(ByVal mail As Outlook.MailItem) As String
         Exit Function
     End If
 
-    apiKey = GetAPIKey()
-    If Len(apiKey) = 0 Then
-        LogMessage "WARN", "LLM enabled but API key not found"
-        ProcessAmbiguousEmail = "REVIEW"
-        Exit Function
+    ' Local provider does not require an API key
+    If RuntimeLLMProvider <> "local" Then
+        apiKey = GetAPIKey()
+        If Len(apiKey) = 0 Then
+            LogMessage "WARN", "LLM enabled but API key not found"
+            ProcessAmbiguousEmail = "REVIEW"
+            Exit Function
+        End If
     End If
 
     ' Call LLM
     On Error GoTo FallbackToReview
-    ProcessAmbiguousEmail = CallAzureOpenAI(BuildEmailPrompt(mail))
+    ProcessAmbiguousEmail = ClassifyViaLLM(BuildEmailPrompt(mail))
     Exit Function
 
 FallbackToReview:
@@ -335,68 +345,25 @@ Private Function BuildEmailPrompt(ByVal mail As Outlook.MailItem) As String
     BuildEmailPrompt = prompt
 End Function
 
-' Call Azure OpenAI API (classification wrapper)
-Private Function CallAzureOpenAI(ByVal prompt As String) As String
+' Call LLM for classification — routes through CallLLM in Utilities.bas
+Private Function ClassifyViaLLM(ByVal prompt As String) As String
     Dim result As String
-    result = CallAzureOpenAICustom(prompt, RuntimeLLMSystemPrompt, RuntimeLLMMaxTokens)
+    result = CallLLM(prompt, RuntimeLLMSystemPrompt, RuntimeClassifyMaxTokens)
 
     ' Extract decision from LLM response
     If InStr(1, UCase(result), "DELETE", vbTextCompare) > 0 Then
-        CallAzureOpenAI = "DELETE"
+        ClassifyViaLLM = "DELETE"
     ElseIf InStr(1, UCase(result), "KEEP", vbTextCompare) > 0 Then
-        CallAzureOpenAI = "KEEP"
+        ClassifyViaLLM = "KEEP"
     Else
-        CallAzureOpenAI = "REVIEW"
+        ClassifyViaLLM = "REVIEW"
     End If
 End Function
 
-' Call Azure OpenAI API with custom system prompt and max tokens.
-' Returns the raw content string from the API response.
-' Shared by classification, summarization, and reply drafting.
+' Backwards-compatible wrapper — delegates to CallLLM in Utilities.bas.
+' Kept so any external macros calling this directly continue to work.
 Public Function CallAzureOpenAICustom(ByVal userPrompt As String, ByVal systemPrompt As String, ByVal maxTokens As Integer) As String
-    Dim http As Object
-    Dim requestBody As String
-    Dim response As String
-    Dim apiKey As String
-
-    apiKey = GetAPIKey()
-
-    If Len(apiKey) = 0 Then
-        CallAzureOpenAICustom = ""
-        LogMessage "WARN", "CallAzureOpenAICustom: no API key"
-        Exit Function
-    End If
-
-    ' Build JSON request body
-    requestBody = "{" & _
-        """messages"":[" & _
-            "{""role"":""system"",""content"":""" & EscapeJSON(systemPrompt) & """}," & _
-            "{""role"":""user"",""content"":""" & EscapeJSON(userPrompt) & """}" & _
-        "]," & _
-        """max_tokens"":" & maxTokens & "," & _
-        """temperature"":" & RuntimeLLMTemperature & _
-    "}"
-
-    LogMessage "DEBUG", "Calling Azure OpenAI..."
-
-    ' Create HTTP request
-    Set http = CreateObject("MSXML2.XMLHTTP")
-    http.Open "POST", RuntimeLLMEndpoint, False
-    http.setRequestHeader "Content-Type", "application/json"
-    http.setRequestHeader "api-key", apiKey
-    http.send requestBody
-
-    ' Parse response
-    If http.Status = 200 Then
-        response = ParseJSONContent(http.responseText)
-        LogMessage "DEBUG", "LLM response: " & Left(response, 100)
-        CallAzureOpenAICustom = response
-    Else
-        LogMessage "ERROR", "Azure OpenAI error: " & http.Status & " - " & http.statusText
-        CallAzureOpenAICustom = ""
-    End If
-
-    Set http = Nothing
+    CallAzureOpenAICustom = CallLLM(userPrompt, systemPrompt, maxTokens)
 End Function
 
 '-------------------------------------------------------------------------------
@@ -408,16 +375,17 @@ Public Sub FilterSelectedEmail()
     Dim mail As Outlook.MailItem
     Dim decision As String
 
-    On Error GoTo ErrorHandler
+    On Error GoTo PROC_ERR
+    PushCallStack "EmailFilter.FilterSelectedEmail"
 
     If Application.ActiveExplorer.Selection.Count = 0 Then
         MsgBox "Please select an email first.", vbExclamation
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     If Not TypeOf Application.ActiveExplorer.Selection(1) Is Outlook.MailItem Then
         MsgBox "Please select an email (not a meeting or other item).", vbExclamation
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     Set mail = Application.ActiveExplorer.Selection(1)
@@ -434,10 +402,12 @@ Public Sub FilterSelectedEmail()
         MsgBox "Action executed: " & decision, vbInformation
     End If
 
+PROC_EXIT:
+    PopCallStack
     Exit Sub
-
-ErrorHandler:
-    MsgBox "Error: " & Err.Description, vbCritical
+PROC_ERR:
+    LogError "EmailFilter", "FilterSelectedEmail", Err.Number, Err.Description
+    Resume PROC_EXIT
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -451,23 +421,24 @@ Public Sub SummarizeSelectedEmail()
     Dim summary As String
     Dim systemPrompt As String
 
-    On Error GoTo ErrorHandler
+    On Error GoTo PROC_ERR
+    PushCallStack "EmailFilter.SummarizeSelectedEmail"
 
     If Not RuntimeUseLLM Then
         MsgBox "LLM is not enabled." & vbCrLf & vbCrLf & _
-               "Enable it in the Dashboard Settings tab or set UseLLMAPI=True in settings.ini.", _
+               "Set UseLLMAPI=True in settings.ini.", _
                vbExclamation, "Summarize Email"
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     If Application.ActiveExplorer.Selection.Count = 0 Then
         MsgBox "Please select an email first.", vbExclamation, "Summarize Email"
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     If Not TypeOf Application.ActiveExplorer.Selection(1) Is Outlook.MailItem Then
         MsgBox "Please select an email (not a meeting or other item).", vbExclamation, "Summarize Email"
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     Set mail = Application.ActiveExplorer.Selection(1)
@@ -481,49 +452,55 @@ Public Sub SummarizeSelectedEmail()
              "Date: " & Format(mail.ReceivedTime, "yyyy-mm-dd hh:nn") & vbCrLf & _
              "Body:" & vbCrLf & Truncate(mail.Body, 2000)
 
-    summary = CallAzureOpenAICustom(prompt, systemPrompt, 300)
+    summary = CallLLM(prompt, systemPrompt, RuntimeSummarizeMaxTokens)
 
     If Len(summary) = 0 Then
         MsgBox "LLM returned no response. Check your API configuration.", vbExclamation, "Summarize Email"
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     MsgBox "Summary of: " & mail.subject & vbCrLf & vbCrLf & summary, _
            vbInformation, "Email Summary"
 
+PROC_EXIT:
+    PopCallStack
     Exit Sub
-
-ErrorHandler:
-    MsgBox "Error summarizing email: " & Err.Description, vbCritical, "Summarize Email"
+PROC_ERR:
+    LogError "EmailFilter", "SummarizeSelectedEmail", Err.Number, Err.Description
+    Resume PROC_EXIT
 End Sub
 
 ' Draft a reply to the currently selected email using the LLM
 Public Sub DraftReplyToSelected()
     Dim mail As Outlook.MailItem
+    Dim replyItem As Outlook.MailItem
     Dim prompt As String
     Dim draft As String
     Dim systemPrompt As String
+    Dim sSubject As String
 
-    On Error GoTo ErrorHandler
+    On Error GoTo PROC_ERR
+    PushCallStack "EmailFilter.DraftReplyToSelected"
 
     If Not RuntimeUseLLM Then
         MsgBox "LLM is not enabled." & vbCrLf & vbCrLf & _
-               "Enable it in the Dashboard Settings tab or set UseLLMAPI=True in settings.ini.", _
+               "Set UseLLMAPI=True in settings.ini.", _
                vbExclamation, "Draft Reply"
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     If Application.ActiveExplorer.Selection.Count = 0 Then
         MsgBox "Please select an email first.", vbExclamation, "Draft Reply"
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     If Not TypeOf Application.ActiveExplorer.Selection(1) Is Outlook.MailItem Then
         MsgBox "Please select an email (not a meeting or other item).", vbExclamation, "Draft Reply"
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     Set mail = Application.ActiveExplorer.Selection(1)
+    sSubject = mail.subject
 
     systemPrompt = "You are Professor Xu Xin at PolyU Hong Kong. Draft a professional, concise reply to the following email. " & _
                    "Be polite and to the point. If the email requires a specific action, acknowledge it. " & _
@@ -531,32 +508,31 @@ Public Sub DraftReplyToSelected()
 
     prompt = "Draft a reply to this email:" & vbCrLf & _
              "From: " & mail.senderName & " <" & GetSenderEmail(mail) & ">" & vbCrLf & _
-             "Subject: " & mail.subject & vbCrLf & _
+             "Subject: " & sSubject & vbCrLf & _
              "Date: " & Format(mail.ReceivedTime, "yyyy-mm-dd hh:nn") & vbCrLf & _
              "Body:" & vbCrLf & Truncate(mail.Body, 2000)
 
-    draft = CallAzureOpenAICustom(prompt, systemPrompt, 500)
+    draft = CallLLM(prompt, systemPrompt, RuntimeReplyMaxTokens, RuntimeReplyTemperature)
 
     If Len(draft) = 0 Then
         MsgBox "LLM returned no response. Check your API configuration.", vbExclamation, "Draft Reply"
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
-    ' Try to show in frmDraftReply UserForm (late binding so it compiles without the form)
-    Dim frm As Object
-    On Error Resume Next
-    Set frm = VBA.UserForms.Add("frmDraftReply")
-    On Error GoTo ErrorHandler
-    If Not frm Is Nothing Then
-        frm.Initialize draft, mail
-        frm.Show
-    Else
-        ' Fallback: show in MsgBox if UserForm not installed
-        MsgBox "Draft Reply:" & vbCrLf & vbCrLf & Left(draft, 1000), vbInformation, "Draft Reply"
-    End If
+    ' Create the reply draft before showing MsgBox (mail reference is still fresh)
+    Set replyItem = mail.Reply
+    replyItem.Body = draft & vbCrLf & vbCrLf & replyItem.Body
+    replyItem.Save
+    Set replyItem = Nothing
 
+    MsgBox "Draft reply saved to Drafts folder." & vbCrLf & vbCrLf & Left(draft, 1000), vbInformation, "Draft Reply"
+
+    LogMessage "INFO", "Draft reply saved to Drafts for: " & Left(sSubject, 50)
+
+PROC_EXIT:
+    PopCallStack
     Exit Sub
-
-ErrorHandler:
-    MsgBox "Error drafting reply: " & Err.Description, vbCritical, "Draft Reply"
+PROC_ERR:
+    LogError "EmailFilter", "DraftReplyToSelected", Err.Number, Err.Description
+    Resume PROC_EXIT
 End Sub

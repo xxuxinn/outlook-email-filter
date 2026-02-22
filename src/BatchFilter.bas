@@ -11,24 +11,6 @@
 Option Explicit
 
 '-------------------------------------------------------------------------------
-' DASHBOARD LAUNCHER
-'-------------------------------------------------------------------------------
-
-' Open the Email Filter Dashboard (assign to QAT for one-click access)
-Public Sub OpenDashboard()
-    ' Late binding: compiles without UserForm installed, shows fallback if missing
-    Dim frm As Object
-    On Error GoTo NoDashboard
-    Set frm = VBA.UserForms.Add("frmFilterDashboard")
-    frm.Show
-    Exit Sub
-NoDashboard:
-    MsgBox "Dashboard UserForm not installed." & vbCrLf & _
-           "Edit settings.ini directly at:" & vbCrLf & _
-           GetSettingsFilePath(), vbInformation, "Dashboard"
-End Sub
-
-'-------------------------------------------------------------------------------
 ' DRY-RUN PREVIEW
 '-------------------------------------------------------------------------------
 
@@ -507,7 +489,7 @@ End Sub
 Public Sub ShowLearnedSenders()
     If Not RuntimeEnableSelfImproving Then
         MsgBox "Self-improving filter is disabled." & vbCrLf & _
-               "Enable it in the Dashboard Settings tab or set EnableSelfImproving=True in settings.ini.", _
+               "Set EnableSelfImproving=True in settings.ini.", _
                vbInformation, "Learned Senders"
         Exit Sub
     End If
@@ -705,7 +687,8 @@ Public Sub RestoreDeletedKeepEmails()
     Dim senderName As String
     Dim subject As String
 
-    On Error GoTo ErrorHandler
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.RestoreDeletedKeepEmails"
 
     ' Force reload learned caches to use the most up-to-date rules
     If RuntimeEnableSelfImproving Then
@@ -724,7 +707,7 @@ Public Sub RestoreDeletedKeepEmails()
 
     If totalMail = 0 Then
         MsgBox "No emails in Deleted Items.", vbInformation, "Restore"
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     response = MsgBox("Scan " & totalMail & " emails in Deleted Items?" & vbCrLf & vbCrLf & _
@@ -733,7 +716,7 @@ Public Sub RestoreDeletedKeepEmails()
                       "All other emails stay in Deleted Items.", _
                       vbYesNo + vbQuestion, "Restore Deleted Keep Emails")
 
-    If response <> vbYes Then Exit Sub
+    If response <> vbYes Then GoTo PROC_EXIT
 
     Set inbox = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox)
 
@@ -772,10 +755,12 @@ Public Sub RestoreDeletedKeepEmails()
            "Left in Deleted Items: " & (totalMail - restoreCount - moveIICount), _
            vbInformation, "Restore Deleted Keep Emails"
 
+PROC_EXIT:
+    PopCallStack
     Exit Sub
-
-ErrorHandler:
-    MsgBox "Error restoring emails: " & Err.Description, vbCritical, "Restore"
+PROC_ERR:
+    LogError "BatchFilter", "RestoreDeletedKeepEmails", Err.Number, Err.Description
+    Resume PROC_EXIT
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -792,7 +777,8 @@ Public Sub FilterSelectedEmails()
     Dim mailCount As Long
     Dim response As VbMsgBoxResult
 
-    On Error GoTo ErrorHandler
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.FilterSelectedEmails"
 
     ' Ensure learned caches are loaded before classifying
     If RuntimeEnableSelfImproving Then
@@ -804,7 +790,7 @@ Public Sub FilterSelectedEmails()
 
     If sel.Count = 0 Then
         MsgBox "No emails selected.", vbExclamation, "Filter Selected"
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     ' Count actual MailItems in selection
@@ -815,7 +801,7 @@ Public Sub FilterSelectedEmails()
 
     If mailCount = 0 Then
         MsgBox "No email items in selection (meetings/tasks are skipped).", vbExclamation, "Filter Selected"
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     ' Confirmation dialog
@@ -823,7 +809,7 @@ Public Sub FilterSelectedEmails()
                       "Actions: Delete / Move to " & RuntimeFolderProtected & " / Move to " & RuntimeFolderReview & " / Keep", _
                       vbYesNo + vbQuestion, "Filter Selected Emails")
 
-    If response <> vbYes Then Exit Sub
+    If response <> vbYes Then GoTo PROC_EXIT
 
     Set stats = CreateStatsDict()
 
@@ -838,10 +824,12 @@ Public Sub FilterSelectedEmails()
 
     MsgBox FormatStats(stats), vbInformation, "Filter Selected Complete"
 
+PROC_EXIT:
+    PopCallStack
     Exit Sub
-
-ErrorHandler:
-    MsgBox "Error filtering selection: " & Err.Description, vbCritical, "Filter Selected"
+PROC_ERR:
+    LogError "BatchFilter", "FilterSelectedEmails", Err.Number, Err.Description
+    Resume PROC_EXIT
 End Sub
 
 ' Filter all emails in the folder currently displayed in the active explorer
@@ -858,7 +846,8 @@ Public Sub FilterCurrentFolder()
     Dim senderName As String
     Dim subject As String
 
-    On Error GoTo ErrorHandler
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.FilterCurrentFolder"
 
     ' Ensure learned caches are loaded before classifying
     If RuntimeEnableSelfImproving Then
@@ -870,7 +859,7 @@ Public Sub FilterCurrentFolder()
 
     If folder Is Nothing Then
         MsgBox "No folder is currently active.", vbExclamation, "Filter Folder"
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     Set inbox = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox)
@@ -893,7 +882,7 @@ Public Sub FilterCurrentFolder()
                           vbYesNo + vbQuestion, "Filter This Folder")
     End If
 
-    If response <> vbYes Then Exit Sub
+    If response <> vbYes Then GoTo PROC_EXIT
 
     Set stats = CreateStatsDict()
 
@@ -921,10 +910,12 @@ Public Sub FilterCurrentFolder()
     LogMessage "INFO", "Folder '" & folder.Name & "' complete: " & FormatStats(stats)
     MsgBox FormatStats(stats), vbInformation, "Filter '" & folder.Name & "' Complete"
 
+PROC_EXIT:
+    PopCallStack
     Exit Sub
-
-ErrorHandler:
-    MsgBox "Error filtering folder: " & Err.Description, vbCritical, "Filter Folder"
+PROC_ERR:
+    LogError "BatchFilter", "FilterCurrentFolder", Err.Number, Err.Description
+    Resume PROC_EXIT
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -1222,14 +1213,15 @@ Public Sub ImportServerRules()
     Dim skippedCount As Long
     Dim response As VbMsgBoxResult
 
-    On Error GoTo ErrorHandler
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.ImportServerRules"
 
     ' Get server rules
     Set rules = Application.Session.DefaultStore.GetRules()
 
     If rules.Count = 0 Then
         MsgBox "No server-side rules found.", vbInformation, "Import Server Rules"
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     ' Count enabled rules
@@ -1246,7 +1238,7 @@ Public Sub ImportServerRules()
                       "via Home -> Rules -> Manage Rules & Alerts." & vbCrLf & vbCrLf & _
                       "Continue?", vbYesNo + vbQuestion, "Import Server Rules")
 
-    If response <> vbYes Then Exit Sub
+    If response <> vbYes Then GoTo PROC_EXIT
 
     ' Declare loop variables at procedure level (VBA has no block scoping)
     Dim recip As Object
@@ -1310,7 +1302,7 @@ Public Sub ImportServerRules()
                 Next j
             End If
         End If
-        On Error GoTo ErrorHandler
+        On Error GoTo PROC_ERR
 
         ' Conditions.SenderAddress.Address (string array of email addresses)
         On Error Resume Next
@@ -1328,7 +1320,7 @@ Public Sub ImportServerRules()
                 End If
             End If
         End If
-        On Error GoTo ErrorHandler
+        On Error GoTo PROC_ERR
 
         ' --- Extract SUBJECT conditions ---
 
@@ -1348,7 +1340,7 @@ Public Sub ImportServerRules()
                 End If
             End If
         End If
-        On Error GoTo ErrorHandler
+        On Error GoTo PROC_ERR
 
         ' Conditions.SubjectOrBody.Text (some rules use "subject or body contains")
         On Error Resume Next
@@ -1366,7 +1358,7 @@ Public Sub ImportServerRules()
                 End If
             End If
         End If
-        On Error GoTo ErrorHandler
+        On Error GoTo PROC_ERR
 
 NextRule:
     Next i
@@ -1381,13 +1373,12 @@ NextRule:
            "Home -> Rules -> Manage Rules & Alerts", _
            vbInformation, "Import Server Rules"
 
+PROC_EXIT:
+    PopCallStack
     Exit Sub
-
-ErrorHandler:
-    MsgBox "Error importing server rules: " & Err.Description & vbCrLf & vbCrLf & _
-           "Partial import may have occurred:" & vbCrLf & _
-           "Senders: " & senderCount & "  |  Subjects: " & subjectCount, _
-           vbCritical, "Import Server Rules"
+PROC_ERR:
+    LogError "BatchFilter", "ImportServerRules", Err.Number, Err.Description
+    Resume PROC_EXIT
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -1425,7 +1416,8 @@ Public Sub ExportLearnedRulesToServer()
     Dim senderSkipped As Long
     Dim varArray() As Variant
 
-    On Error GoTo ErrorHandler
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.ExportLearnedRulesToServer"
 
     ' --- Step 1: Load caches and collect DELETE rules ---
     If RuntimeEnableSelfImproving Then
@@ -1433,9 +1425,9 @@ Public Sub ExportLearnedRulesToServer()
         LoadLearnedSubjects
     Else
         MsgBox "Self-improving filter is disabled." & vbCrLf & _
-               "Enable it in the Dashboard Settings tab or set EnableSelfImproving=True in settings.ini.", _
+               "Set EnableSelfImproving=True in settings.ini.", _
                vbInformation, "Export Learned Rules"
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     Set subjectKeys = GetLearnedSubjectKeys()
@@ -1464,7 +1456,7 @@ Public Sub ExportLearnedRulesToServer()
                "Drag emails into '" & RuntimeFolderLearnDelete & "' (sender) or " & _
                "'" & RuntimeFolderLearnSubject & "' (subject) to learn DELETE rules.", _
                vbInformation, "Export Learned Rules"
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     ' --- Step 2: Confirmation dialog ---
@@ -1475,7 +1467,7 @@ Public Sub ExportLearnedRulesToServer()
                       "Action: Delete (to Deleted Items, recoverable)." & vbCrLf & vbCrLf & _
                       "Continue?", vbYesNo + vbQuestion, "Export Learned Rules to Server")
 
-    If response <> vbYes Then Exit Sub
+    If response <> vbYes Then GoTo PROC_EXIT
 
     ' --- Step 3: Get server rules and check for existing exports ---
     Set colRules = Application.Session.DefaultStore.GetRules()
@@ -1495,7 +1487,7 @@ Public Sub ExportLearnedRulesToServer()
                           "(Recommended to avoid duplicates)", _
                           vbYesNoCancel + vbQuestion, "Existing Export Rules")
 
-        If response = vbCancel Then Exit Sub
+        If response = vbCancel Then GoTo PROC_EXIT
 
         If response = vbYes Then
             ' Remove existing export rules (reverse iteration)
@@ -1558,7 +1550,7 @@ Public Sub ExportLearnedRulesToServer()
                 LogMessage "INFO", "Created rule: " & ruleName & " (" & (batchEnd - batchStart + 1) & " senders)"
             End If
 
-            On Error GoTo ErrorHandler
+            On Error GoTo PROC_ERR
         Next batchNum
     End If
 
@@ -1623,7 +1615,7 @@ Public Sub ExportLearnedRulesToServer()
                 subjectRuleCount = subjectRuleCount + 1
             End If
 
-            On Error GoTo ErrorHandler
+            On Error GoTo PROC_ERR
         Next j
     End If
 
@@ -1641,7 +1633,7 @@ Public Sub ExportLearnedRulesToServer()
                "If the Rules dialog is open, close it and try again.", _
                vbExclamation, "Export Learned Rules"
         On Error GoTo 0
-        Exit Sub
+        GoTo PROC_EXIT
     End If
     On Error GoTo 0
 
@@ -1654,15 +1646,12 @@ Public Sub ExportLearnedRulesToServer()
            "Verify in: Home -> Rules -> Manage Rules & Alerts", _
            vbInformation, "Export Learned Rules to Server"
 
+PROC_EXIT:
+    PopCallStack
     Exit Sub
-
-ErrorHandler:
-    MsgBox "Error exporting rules to server: " & Err.Description & vbCrLf & vbCrLf & _
-           "Partial export may have occurred:" & vbCrLf & _
-           "Sender rules created: " & senderRuleCount & vbCrLf & _
-           "Subject rules created: " & subjectRuleCount & vbCrLf & vbCrLf & _
-           "If the Rules dialog is open, close it and try again.", _
-           vbCritical, "Export Learned Rules"
+PROC_ERR:
+    LogError "BatchFilter", "ExportLearnedRulesToServer", Err.Number, Err.Description
+    Resume PROC_EXIT
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -1763,96 +1752,29 @@ Public Sub DetectAndMigrateOldFolders()
            vbInformation, "Folder Migration"
 End Sub
 
-'-------------------------------------------------------------------------------
-' PORTABILITY HELPERS
-'-------------------------------------------------------------------------------
-
-' Export all VBA modules to the user's Desktop folder.
-' Requires: File -> Options -> Trust Center -> Trust Center Settings ->
-'           Macro Settings -> "Trust access to the VBA project object model"
-Public Sub ExportAllModules()
-    Dim vbProj As Object
-    Dim vbComp As Object
-    Dim exportPath As String
-    Dim exportCount As Long
-    Dim ext As String
-
-    On Error GoTo ErrorHandler
-
-    Set vbProj = Application.VBE.ActiveVBProject
-
-    exportPath = Environ("USERPROFILE") & "\Desktop\OutlookFilterExport_" & Format(Now, "yyyymmdd_hhnnss")
-
-    ' Create export directory
-    Dim fso As Object
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    If Not fso.FolderExists(exportPath) Then
-        fso.CreateFolder exportPath
-    End If
-    Set fso = Nothing
-
-    exportCount = 0
-
-    For Each vbComp In vbProj.VBComponents
-        Select Case vbComp.Type
-            Case 1  ' vbext_ct_StdModule (.bas)
-                ext = ".bas"
-            Case 3  ' vbext_ct_MSForm (.frm)
-                ext = ".frm"
-            Case 2  ' vbext_ct_ClassModule (.cls)
-                ext = ".cls"
-            Case 100  ' vbext_ct_Document (ThisOutlookSession)
-                ext = ".cls"
-            Case Else
-                GoTo NextComp
-        End Select
-
-        vbComp.Export exportPath & "\" & vbComp.Name & ext
-        exportCount = exportCount + 1
-        LogMessage "INFO", "Exported: " & vbComp.Name & ext
-
-NextComp:
-    Next vbComp
-
-    MsgBox "Export complete!" & vbCrLf & vbCrLf & _
-           "Exported " & exportCount & " module(s) to:" & vbCrLf & _
-           exportPath, _
-           vbInformation, "Export VBA Modules"
-
-    Exit Sub
-
-ErrorHandler:
-    If Err.Number = 1004 Or InStr(1, Err.Description, "programmatic access", vbTextCompare) > 0 Then
-        MsgBox "Access to VBA project model is not enabled." & vbCrLf & vbCrLf & _
-               "To enable:" & vbCrLf & _
-               "1. File -> Options -> Trust Center -> Trust Center Settings" & vbCrLf & _
-               "2. Macro Settings -> check 'Trust access to the VBA project object model'" & vbCrLf & _
-               "3. Click OK, then try again.", _
-               vbExclamation, "Export VBA Modules"
-    Else
-        MsgBox "Error exporting modules: " & Err.Description, vbCritical, "Export VBA Modules"
-    End If
-End Sub
-
 ' Display version information and system status
 Public Sub ShowVersionInfo()
     Dim info As String
 
-    info = "Email Filter v" & FILTER_VERSION & vbCrLf
+    info = "Email Agent v" & FILTER_VERSION & vbCrLf
     info = info & "Version Date: " & FILTER_VERSION_DATE & vbCrLf
     info = info & String(40, "-") & vbCrLf & vbCrLf
 
     info = info & "Settings file: " & GetSettingsFilePath() & vbCrLf
     info = info & "Learned senders file: " & GetLearnedSendersFilePath() & vbCrLf
-    info = info & "Learned subjects file: " & GetLearnedSubjectsFilePath() & vbCrLf & vbCrLf
+    info = info & "Learned subjects file: " & GetLearnedSubjectsFilePath() & vbCrLf
+    info = info & "Learned replies file: " & GetLearnedRepliesFilePath() & vbCrLf
+    info = info & "Error log: " & RuntimeErrorLogFile & vbCrLf & vbCrLf
 
     info = info & "Learned sender rules: " & GetLearnedSendersCount() & vbCrLf
     info = info & "Learned subject rules: " & GetLearnedSubjectsCount() & vbCrLf & vbCrLf
 
     info = info & "Settings:" & vbCrLf
     info = info & "  Logging: " & IIf(RuntimeEnableLogging, "ON (" & RuntimeLogLevel & ")", "OFF") & vbCrLf
+    info = info & "  Debug mode: " & IIf(RuntimeDebugMode, "ON", "OFF") & vbCrLf
     info = info & "  Self-improving: " & IIf(RuntimeEnableSelfImproving, "ON", "OFF") & vbCrLf
-    info = info & "  LLM API: " & IIf(RuntimeUseLLM, "ON", "OFF") & vbCrLf & vbCrLf
+    info = info & "  LLM API: " & IIf(RuntimeUseLLM, "ON (provider: " & RuntimeLLMProvider & ")", "OFF") & vbCrLf
+    info = info & "  Auto-reply: " & IIf(RuntimeEnableAutoReply, "ON", "OFF") & vbCrLf & vbCrLf
 
     info = info & "Folder names:" & vbCrLf
     info = info & "  Protected: " & RuntimeFolderProtected & vbCrLf
@@ -1860,6 +1782,7 @@ Public Sub ShowVersionInfo()
     info = info & "  LearnKeep: " & RuntimeFolderLearnKeep & vbCrLf
     info = info & "  LearnDelete: " & RuntimeFolderLearnDelete & vbCrLf
     info = info & "  LearnSubject: " & RuntimeFolderLearnSubject & vbCrLf
+    info = info & "  LearnReply: " & RuntimeFolderLearnReply & vbCrLf
 
-    MsgBox info, vbInformation, "Email Filter Version Info"
+    MsgBox info, vbInformation, "Email Agent Version Info"
 End Sub

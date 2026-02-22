@@ -1,5 +1,5 @@
 '===============================================================================
-' Config.bas - Configuration Module for Email Filter v2.0
+' Config.bas - Configuration Module for Email Agent v3.0
 '===============================================================================
 ' This module contains:
 '   1. DEFAULT_* constants: compile-time fallback values
@@ -7,7 +7,7 @@
 '   3. Version constants
 '   4. Infrastructure constants (data file paths, not user-configurable)
 '
-' Users customize via settings.ini (or the Dashboard UI), NOT by editing this file.
+' Users customize via settings.ini, NOT by editing this file.
 ' To reset to defaults, delete settings.ini and restart Outlook.
 '===============================================================================
 
@@ -16,8 +16,8 @@ Option Explicit
 '-------------------------------------------------------------------------------
 ' VERSION
 '-------------------------------------------------------------------------------
-Public Const FILTER_VERSION As String = "2.0.0"
-Public Const FILTER_VERSION_DATE As String = "2026-02-15"
+Public Const FILTER_VERSION As String = "3.0.0"
+Public Const FILTER_VERSION_DATE As String = "2026-02-19"
 
 '-------------------------------------------------------------------------------
 ' RUNTIME VARIABLES (populated by LoadAllSettings at startup)
@@ -48,15 +48,39 @@ Public RuntimeDeleteSenderPatterns As String
 Public RuntimeDeleteKnownSenders As String
 Public RuntimeDeleteSubjectPatterns As String
 
-' LLM
+' LLM (multi-provider)
 Public RuntimeUseLLM As Boolean
-Public RuntimeLLMEndpoint As String
+Public RuntimeLLMProvider As String          ' "local" | "azure" | "claude" | "openai"
+Public RuntimeLLMEndpoint As String          ' Azure endpoint (legacy / provider=azure)
+Public RuntimeLocalEndpoint As String        ' Local LLM endpoint (Ollama, LM Studio, Inferencer, etc.)
+Public RuntimeLocalModel As String           ' Model name for local server (e.g. "qwen3:8b")
+Public RuntimeClaudeEndpoint As String       ' Anthropic API endpoint
+Public RuntimeClaudeModel As String          ' Claude model ID
+Public RuntimeOpenAIEndpoint As String       ' OpenAI-compatible endpoint (OpenRouter, Groq, etc.)
+Public RuntimeOpenAIModel As String          ' Model ID for OpenAI-compatible provider
 Public RuntimeAPIKeyMethod As String
 Public RuntimeAPIKeyEnvVar As String
 Public RuntimeAPIKeyHardcoded As String
 Public RuntimeLLMSystemPrompt As String
-Public RuntimeLLMMaxTokens As Integer
-Public RuntimeLLMTemperature As Double
+Public RuntimeClassifyMaxTokens As Integer
+Public RuntimeSummarizeMaxTokens As Integer
+Public RuntimeReplyMaxTokens As Integer
+Public RuntimeLLMTemperature As Double       ' Legacy / classify temperature
+Public RuntimeReplyTemperature As Double
+
+' Agent
+Public RuntimeEnableAutoReply As Boolean
+Public RuntimeAutoReplyOnArrival As Boolean
+Public RuntimeFolderLearnReply As String
+Public RuntimeMaxReplyExamples As Integer
+Public RuntimeReplyPersona As String
+Public RuntimeScanSentItems As Boolean
+Public RuntimeScanSentDays As Integer
+Public RuntimeAutoReplyForSenders As String
+
+' Error handling / debug
+Public RuntimeDebugMode As Boolean           ' Show MsgBox on errors when True
+Public RuntimeErrorLogFile As String         ' Full path to error.log (set at runtime)
 
 ' Flag: have settings been loaded yet?
 Public RuntimeSettingsLoaded As Boolean
@@ -67,16 +91,39 @@ Public RuntimeSettingsLoaded As Boolean
 
 ' LLM defaults
 Public Const DEFAULT_USE_LLM_API As Boolean = False
+Public Const DEFAULT_LLM_PROVIDER As String = "azure"
 Public Const DEFAULT_AZURE_OPENAI_ENDPOINT As String = "https://YOUR-RESOURCE.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-02-15-preview"
+Public Const DEFAULT_LOCAL_ENDPOINT As String = "http://localhost:11434/v1/chat/completions"
+Public Const DEFAULT_LOCAL_MODEL As String = "qwen3:8b"
+Public Const DEFAULT_CLAUDE_ENDPOINT As String = "https://api.anthropic.com/v1/messages"
+Public Const DEFAULT_CLAUDE_MODEL As String = "claude-opus-4-20250115"
+Public Const DEFAULT_OPENAI_COMPAT_ENDPOINT As String = "https://openrouter.ai/api/v1/chat/completions"
+Public Const DEFAULT_OPENAI_COMPAT_MODEL As String = "qwen/qwen3-8b"
 Public Const DEFAULT_API_KEY_METHOD As String = "ENV"
-Public Const DEFAULT_API_KEY_ENV_VAR As String = "AZURE_OPENAI_KEY"
+Public Const DEFAULT_API_KEY_ENV_VAR As String = "LLM_API_KEY"
 Public Const DEFAULT_API_KEY_HARDCODED As String = ""
 Public Const DEFAULT_LLM_SYSTEM_PROMPT As String = "You are filtering emails for Professor Xu Xin at PolyU Hong Kong. " & _
     "Respond with ONLY 'DELETE' or 'KEEP' followed by a brief reason (max 10 words). " & _
     "DELETE: Generic broadcasts, announcements, FYI-only, mass CC, admin notices, promotional, newsletters. " & _
     "KEEP: Personally addressed, requires action/response, from students/collaborators, important deadlines."
-Public Const DEFAULT_LLM_MAX_TOKENS As Integer = 100
+Public Const DEFAULT_CLASSIFY_MAX_TOKENS As Integer = 100
+Public Const DEFAULT_SUMMARIZE_MAX_TOKENS As Integer = 300
+Public Const DEFAULT_REPLY_MAX_TOKENS As Integer = 800
 Public Const DEFAULT_LLM_TEMPERATURE As Double = 0.3
+Public Const DEFAULT_REPLY_TEMPERATURE As Double = 0.7
+
+' Agent defaults
+Public Const DEFAULT_ENABLE_AUTO_REPLY As Boolean = False
+Public Const DEFAULT_AUTO_REPLY_ON_ARRIVAL As Boolean = False
+Public Const DEFAULT_FOLDER_LEARN_REPLY As String = "LearnReply"
+Public Const DEFAULT_MAX_REPLY_EXAMPLES As Integer = 5
+Public Const DEFAULT_REPLY_PERSONA As String = ""
+Public Const DEFAULT_SCAN_SENT_ITEMS As Boolean = False
+Public Const DEFAULT_SCAN_SENT_DAYS As Integer = 30
+Public Const DEFAULT_AUTO_REPLY_FOR_SENDERS As String = ""
+
+' Debug / error handling defaults
+Public Const DEFAULT_DEBUG_MODE As Boolean = False
 
 ' Folder name defaults (v2.0 readable names)
 Public Const DEFAULT_FOLDER_PROTECTED As String = "Protected"
@@ -117,6 +164,11 @@ Public Const LEARNED_DATA_FOLDER As String = "OutlookEmailFilter"
 ' Filenames for learned rules (pipe-delimited, append-only)
 Public Const LEARNED_SENDERS_FILE As String = "learned_senders.txt"
 Public Const LEARNED_SUBJECTS_FILE As String = "learned_subjects.txt"
+Public Const LEARNED_REPLIES_FILE As String = "learned_replies.txt"
 
-' Settings file name
+' Settings and log file names
 Public Const SETTINGS_FILE_NAME As String = "settings.ini"
+Public Const ERROR_LOG_FILE_NAME As String = "error.log"
+
+' Call stack max depth
+Public Const CALL_STACK_MAX_DEPTH As Integer = 20
