@@ -966,6 +966,7 @@ Public Sub LoadAllSettings()
     RuntimeAPIKeyMethod = ReadINISetting("LLM", "APIKeyMethod", DEFAULT_API_KEY_METHOD)
     RuntimeAPIKeyEnvVar = ReadINISetting("LLM", "APIKeyEnvVar", DEFAULT_API_KEY_ENV_VAR)
     RuntimeAPIKeyHardcoded = ReadINISetting("LLM", "APIKeyHardcoded", DEFAULT_API_KEY_HARDCODED)
+    RuntimeClassifyBodyChars = ReadINIInt("LLM", "ClassifyBodyChars", DEFAULT_CLASSIFY_BODY_CHARS)
     RuntimeClassifyMaxTokens = ReadINIInt("LLM", "ClassifyMaxTokens", DEFAULT_CLASSIFY_MAX_TOKENS)
     RuntimeSummarizeMaxTokens = ReadINIInt("LLM", "SummarizeMaxTokens", DEFAULT_SUMMARIZE_MAX_TOKENS)
     RuntimeReplyMaxTokens = ReadINIInt("LLM", "ReplyMaxTokens", DEFAULT_REPLY_MAX_TOKENS)
@@ -1044,6 +1045,7 @@ Public Sub CreateDefaultSettingsFile()
     ts.WriteLine "APIKeyMethod=" & DEFAULT_API_KEY_METHOD
     ts.WriteLine "APIKeyEnvVar=" & DEFAULT_API_KEY_ENV_VAR
     ts.WriteLine "APIKeyHardcoded=" & DEFAULT_API_KEY_HARDCODED
+    ts.WriteLine "ClassifyBodyChars=" & DEFAULT_CLASSIFY_BODY_CHARS
     ts.WriteLine "ClassifyMaxTokens=" & DEFAULT_CLASSIFY_MAX_TOKENS
     ts.WriteLine "SummarizeMaxTokens=" & DEFAULT_SUMMARIZE_MAX_TOKENS
     ts.WriteLine "ReplyMaxTokens=" & DEFAULT_REPLY_MAX_TOKENS

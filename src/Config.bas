@@ -62,6 +62,7 @@ Public RuntimeAPIKeyMethod As String
 Public RuntimeAPIKeyEnvVar As String
 Public RuntimeAPIKeyHardcoded As String
 Public RuntimeLLMSystemPrompt As String
+Public RuntimeClassifyBodyChars As Integer
 Public RuntimeClassifyMaxTokens As Integer
 Public RuntimeSummarizeMaxTokens As Integer
 Public RuntimeReplyMaxTokens As Integer
@@ -106,6 +107,7 @@ Public Const DEFAULT_LLM_SYSTEM_PROMPT As String = "You are filtering emails for
     "Respond with ONLY 'DELETE' or 'KEEP' followed by a brief reason (max 10 words). " & _
     "DELETE: Generic broadcasts, announcements, FYI-only, mass CC, admin notices, promotional, newsletters. " & _
     "KEEP: Personally addressed, requires action/response, from students/collaborators, important deadlines."
+Public Const DEFAULT_CLASSIFY_BODY_CHARS As Integer = 800
 Public Const DEFAULT_CLASSIFY_MAX_TOKENS As Integer = 100
 Public Const DEFAULT_SUMMARIZE_MAX_TOKENS As Integer = 300
 Public Const DEFAULT_REPLY_MAX_TOKENS As Integer = 800

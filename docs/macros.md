@@ -76,6 +76,8 @@ Full list of callable macros. Assign frequently used ones to the Quick Access To
 | Macro | Purpose |
 |-------|---------|
 | `DetectAndMigrateOldFolders` | Rename v1.x folders (I/II/III/IIII/V) to v2.0 names |
-| `ReinitializeFilter` | Restart event handlers |
-| `EnableRealTimeFilter` | Re-enable filtering + command poller (run in Immediate Window: `ThisOutlookSession.EnableRealTimeFilter`) |
-| `DisableRealTimeFilter` | Disable filtering + command poller (run in Immediate Window: `ThisOutlookSession.DisableRealTimeFilter`) |
+| `ThisOutlookSession.ReinitializeFilter` | Restart event handlers + command poller + reload settings |
+| `ThisOutlookSession.EnableRealTimeFilter` | Re-enable filtering + command poller |
+| `ThisOutlookSession.DisableRealTimeFilter` | Disable filtering + command poller |
+
+> **Note**: These three macros live in `ThisOutlookSession` (a document module), so they **must** be called with the full qualified name from the Immediate Window. `ReinitializeFilter` alone will give "Sub or Function not defined."

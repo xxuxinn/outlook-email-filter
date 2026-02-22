@@ -37,7 +37,6 @@ Review=Review
 LearnKeep=LearnKeep
 LearnDelete=LearnDelete
 LearnSubject=LearnSubjectDelete
-LearnReply=LearnReply
 
 [Patterns]
 ProtectedDomains=substack.com,reddit.com,redditmail.com
@@ -62,6 +61,7 @@ OpenAIModel=qwen/qwen3-8b
 APIKeyMethod=ENV        ; ENV | HARDCODED
 APIKeyEnvVar=LLM_API_KEY
 APIKeyHardcoded=
+ClassifyBodyChars=800
 ClassifyMaxTokens=100
 SummarizeMaxTokens=300
 ReplyMaxTokens=800

@@ -425,7 +425,9 @@ See [macros.md](macros.md) for the complete reference. Key categories:
 `RestoreFromReview`, `RestoreDeletedKeepEmails`
 
 ### System
-`ReinitializeFilter`, `EnableRealTimeFilter`, `DisableRealTimeFilter`, `DetectAndMigrateOldFolders`, `ShowVersionInfo`
+`ThisOutlookSession.ReinitializeFilter`, `ThisOutlookSession.EnableRealTimeFilter`, `ThisOutlookSession.DisableRealTimeFilter`, `DetectAndMigrateOldFolders`, `ShowVersionInfo`
+
+> **Note**: The first three macros live in `ThisOutlookSession` (a document module) and must be called with the full qualified name from the Immediate Window.
 
 ---
 
@@ -490,17 +492,27 @@ Manually remove each old module (right-click → Remove → No), then re-import 
 
 ## Updating the Code
 
-### Module-only changes (no restart needed)
+### ⚠️ CRITICAL: Stop timers before removing modules
 
-1. Open VBA Editor (Alt+F11)
-2. Right-click the changed module(s) → **Remove** → **No** (don't export)
-3. **File → Import File...** → import the updated `.bas` file(s)
-4. **Debug → Compile Project** → **Ctrl+S**
+**You MUST stop the command poller and event handlers before removing/reimporting modules.**
+The Win32 `SetTimer` command poller fires every 2 seconds. If you remove a module while the timer is active, the callback points to deallocated memory and **Outlook will crash**.
+
+### Module-only changes
+
+1. Open VBA Editor (Alt+F11) → Immediate Window (Ctrl+G)
+2. Run: `StopCommandPollerStd` — stops the Win32 timer
+3. Run: `ThisOutlookSession.DisableRealTimeFilter` — stops event handlers
+   (Must use the full qualified name — `DisableRealTimeFilter` alone won't resolve because it lives in a document module, not a standard module)
+4. Right-click the changed module(s) → **Remove** → **No** (don't export)
+5. **File → Import File...** → import the updated `.bas` file(s)
+6. **Debug → Compile Project** → **Ctrl+S**
+7. Run: `ThisOutlookSession.ReinitializeFilter` — restarts event handlers + command poller + reloads settings
 
 ### ThisOutlookSession changes
 
-1. Double-click to open → Ctrl+A → Delete → paste new code
-2. Compile, save, **restart Outlook**
+1. Run `StopCommandPollerStd` and `ThisOutlookSession.DisableRealTimeFilter` first (steps 2–3 above)
+2. Double-click ThisOutlookSession to open → Ctrl+A → Delete → paste new code
+3. Compile, save, **restart Outlook**
 
 ---
 
@@ -543,7 +555,7 @@ Learning folders are missing or misnamed. Check:
 ### Web UI — macro commands time out
 
 - Outlook must be running and the VBA project must be loaded
-- The command poller starts automatically at Outlook startup — if it stopped, run `ReinitializeFilter` in the Immediate Window
+- The command poller starts automatically at Outlook startup — if it stopped, run `ThisOutlookSession.ReinitializeFilter` in the Immediate Window
 - Commands directory: `%APPDATA%\OutlookEmailFilter\commands\` — check that this folder exists and is writable
 - Settings, learned rules, and logs always work even without Outlook running
 

@@ -121,7 +121,6 @@ Review=Review
 LearnKeep=LearnKeep
 LearnDelete=LearnDelete
 LearnSubject=LearnSubjectDelete
-LearnReply=LearnReply
 ```
 
 ### `[Patterns]`
@@ -150,6 +149,7 @@ OpenAIModel=qwen/qwen3-8b
 APIKeyMethod=ENV       ; ENV | HARDCODED
 APIKeyEnvVar=LLM_API_KEY
 APIKeyHardcoded=
+ClassifyBodyChars=800
 ClassifyMaxTokens=100
 SummarizeMaxTokens=300
 ReplyMaxTokens=800
@@ -263,7 +263,7 @@ The Web UI cannot call VBA directly (Outlook has no external `Application.Run()`
 3. VBA executes the macro and writes a result JSON file
 4. The browser polls for the result and displays the output
 
-The command poller starts automatically when Outlook starts and stops when you run `DisableRealTimeFilter`. If Outlook is not running, macro commands will time out after 30 seconds.
+The command poller starts automatically when Outlook starts and stops when you run `ThisOutlookSession.DisableRealTimeFilter`. If Outlook is not running, macro commands will time out after 30 seconds.
 
 ### What works without Outlook running
 
@@ -278,16 +278,22 @@ The command poller starts automatically when Outlook starts and stops when you r
 
 1. **Export your existing modules** (optional backup): In the VBA Editor, right-click each module in the Project Explorer → **Export File...** → save to a folder of your choice. Repeat for `Config`, `Utilities`, `EmailFilter`, `EmailAgent`, `BatchFilter`, and `ThisOutlookSession`.
 
-2. **Re-import the modules** (Part 2 above) — right-click each old module in the Project Explorer → **Remove** → **No**, then re-import the updated `.bas` files.
+2. **⚠️ Stop timers first**: In the Immediate Window (Ctrl+G), run:
+   ```
+   StopCommandPollerStd
+   ThisOutlookSession.DisableRealTimeFilter
+   ```
 
-3. **Run the migration macro** if you have old v1.x folder names (I, II, III, IIII, V):
+3. **Re-import the modules** (Part 2 above) — right-click each old module in the Project Explorer → **Remove** → **No**, then re-import the updated `.bas` files.
+
+4. **Run the migration macro** if you have old v1.x folder names (I, II, III, IIII, V):
    ```
    DetectAndMigrateOldFolders
    ```
 
-4. Your existing `settings.ini`, `learned_senders.txt`, and `learned_subjects.txt` are **preserved** — re-importing modules does not affect data files.
+5. Your existing `settings.ini`, `learned_senders.txt`, and `learned_subjects.txt` are **preserved** — re-importing modules does not affect data files.
 
-5. After restart, check `ShowVersionInfo` shows `v3.0.0`.
+6. Run `ThisOutlookSession.ReinitializeFilter` (or restart Outlook) and check `ShowVersionInfo` shows `v3.0.0`.
 
 ---
 
@@ -299,29 +305,62 @@ From `%APPDATA%\OutlookEmailFilter\` on the old PC, copy:
 
 | File | Contains |
 |------|----------|
-| `settings.ini` | All configured settings and patterns |
+| `settings.ini` | All configured settings, patterns, and LLM config |
 | `learned_senders.txt` | Learned sender rules (KEEP/DELETE) |
 | `learned_subjects.txt` | Learned subject rules (DELETE) |
 | `learned_replies.txt` | Learned reply style examples |
 
-### Step 2: Install on the new PC
+### Step 2: Set up the API key on the new PC (if using LLM)
+
+If your `settings.ini` uses `APIKeyMethod=ENV` (recommended), you must set the environment variable on the new PC:
+
+1. **Start Menu** → search "Environment Variables" → "Edit the system environment variables"
+2. Click **"Environment variables..."**
+3. Under **User variables**, click **New**:
+   - Variable name: the value of `APIKeyEnvVar` in your settings.ini (default: `LLM_API_KEY`)
+   - Variable value: your `sk-...` API key
+4. Click OK → OK
+
+> **Important**: Set it as a **system-wide** environment variable, not in a terminal session. Outlook reads environment variables at process start and won't see terminal-scoped variables.
+
+If you use `APIKeyMethod=HARDCODED`, the key is already in `settings.ini` — no extra step needed.
+
+### Step 3: Install on the new PC
 
 Follow Parts 1–3 above. On first restart, Outlook auto-creates default data files.
 
-### Step 3: Replace defaults with your data
+### Step 4: Replace defaults with your data
 
 1. Close Outlook on the new PC
 2. Navigate to `%APPDATA%\OutlookEmailFilter\`
 3. Replace all four files with your copies from the old PC
 4. Restart Outlook
 
-### Step 4: Verify
+### Step 5: Verify
 
+In the Immediate Window (Ctrl+G):
+```
+? RuntimeUseLLM              → True if LLM is enabled
+? RuntimeLLMProvider         → your configured provider
+? Len(GetAPIKey())           → >0 if API key is resolved
+```
+
+Then run macros to verify:
 ```
 ShowVersionInfo
 ShowLearnedSenders
 FilterExistingDryRun
 ```
+
+### Step 6: Web UI (optional)
+
+If you use the Web UI, install it on the new PC:
+```bash
+cd webui
+pip install -r requirements.txt
+python server.py
+```
+No additional migration needed — the Web UI reads from the same `settings.ini` and data files you already copied.
 
 ---
 
@@ -335,7 +374,7 @@ In VBA Editor → **Tools → References** → uncheck anything marked **MISSING
 
 ### Emails not filtered automatically
 - Confirm `inboxItems_ItemAdd` is uncommented in ThisOutlookSession
-- Run `ReinitializeFilter` in the Immediate Window
+- Run `ThisOutlookSession.ReinitializeFilter` in the Immediate Window
 - Restart Outlook
 
 ### LLM calls failing

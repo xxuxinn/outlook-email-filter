@@ -338,7 +338,7 @@ Private Function BuildEmailPrompt(ByVal mail As Outlook.MailItem) As String
     prompt = "Classify this email:" & vbCrLf
     prompt = prompt & "From: " & mail.senderName & " <" & GetSenderEmail(mail) & ">" & vbCrLf
     prompt = prompt & "Subject: " & mail.subject & vbCrLf
-    prompt = prompt & "Body preview: " & Truncate(mail.Body, 300) & vbCrLf
+    prompt = prompt & "Body preview: " & Truncate(mail.Body, RuntimeClassifyBodyChars) & vbCrLf
     prompt = prompt & vbCrLf
     prompt = prompt & "Respond with ONLY 'DELETE' or 'KEEP' followed by brief reason."
 

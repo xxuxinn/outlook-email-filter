@@ -53,10 +53,14 @@ VBA side of bridge: `GetCommandsDir()` + `WriteResultFile()` in Utilities.bas,
 ## Multi-Provider LLM (v3.0)
 
 `CallLLM(userPrompt, systemPrompt, maxTokens, [temperature])` in Utilities.bas routes to:
-- `"local"` → Ollama/LM Studio/Inferencer OpenAI-compatible endpoint at `RuntimeLocalEndpoint`
-- `"azure"` → Azure OpenAI at `RuntimeLLMEndpoint` (api-key header)
-- `"claude"` → Anthropic `/v1/messages` (x-api-key + anthropic-version headers, different JSON schema)
-- `"openai"` → External OpenAI-compatible API (OpenRouter, Groq, etc.) at `RuntimeOpenAIEndpoint` (Bearer token auth)
+- `"local"` → Ollama/LM Studio/Inferencer OpenAI-compatible endpoint at `RuntimeLocalEndpoint` (no auth)
+- `"azure"` → Azure OpenAI at `RuntimeLLMEndpoint` (`api-key` header)
+- `"claude"` → Anthropic `/v1/messages` (`x-api-key` + `anthropic-version` headers, different JSON schema)
+- `"openai"` → External OpenAI-compatible API (OpenRouter, Groq, custom routers, etc.) at `RuntimeOpenAIEndpoint` (`Bearer` token auth)
+
+`ClassifyBodyChars` (default 800) controls how many characters of email body are sent to the LLM for classification. Configurable in `settings.ini` under `[LLM]`.
+
+API key: `GetAPIKey()` reads from environment variable (`APIKeyMethod=ENV`, `APIKeyEnvVar=LLM_API_KEY`) or hardcoded value (`APIKeyMethod=HARDCODED`). Set environment variables system-wide (not terminal-scoped) so Outlook can read them.
 
 `CallAzureOpenAICustom` is kept as a backwards-compatible wrapper; new code always calls `CallLLM`.
 
@@ -87,6 +91,7 @@ End Sub
 - **Exchange addresses**: Use `GetSenderEmail(mail)` not `.SenderEmailAddress` directly (handles `/O=...` internal format).
 - **SanitizeSubject()**: Must strip `vbCr`, `vbLf`, `|`, `Chr(0)` from subjects before Dictionary key or file write.
 - **Locale-safe decimal**: `Format(temp, "0.00")` + `Replace(..., ",", ".")` before embedding in JSON strings.
+- **Document module scope**: Subs in `ThisOutlookSession` (a document module) must be called with full qualified name from the Immediate Window: `ThisOutlookSession.ReinitializeFilter`, not just `ReinitializeFilter`.
 
 ## Data Files
 
@@ -101,6 +106,33 @@ See [@docs/macros.md](docs/macros.md) for the full macro reference table.
 - No build system — import `.bas` files directly in VBA Editor (Alt+F11)
 - `ThisOutlookSession.bas` must be copy-pasted into the built-in module, not imported
 - Real-time filtering (`inboxItems_ItemAdd`) is enabled by default; disable via `ThisOutlookSession.DisableRealTimeFilter`
+
+### ⚠️ CRITICAL: Module Update Procedure
+
+**You MUST stop all timers and event handlers before removing/reimporting modules.**
+The Win32 `SetTimer` command poller fires every 2 s and will crash Outlook if its callback
+code is unloaded mid-flight. Follow this exact order:
+
+1. Open Immediate Window (Ctrl+G)
+2. Run: `StopCommandPollerStd` — stops the Win32 timer
+3. Run: `ThisOutlookSession.DisableRealTimeFilter` — stops event handlers
+   (Must use full qualified name — `DisableRealTimeFilter` alone won't resolve from the Immediate Window because it lives in a document module, not a standard module)
+4. Now safe to Remove → Re-import `.bas` modules
+5. **Ctrl+S** to save the VBA project
+6. Run: `ThisOutlookSession.ReinitializeFilter` — restarts event handlers + command poller + reloads settings
+
+### Verifying After Module Update
+
+After `ReinitializeFilter`, verify in the Immediate Window (Ctrl+G):
+```
+? RuntimeClassifyBodyChars   → should show current setting (default: 800)
+? RuntimeUseLLM              → True if LLM is enabled
+? RuntimeLLMProvider         → "local" | "azure" | "claude" | "openai"
+? Len(GetAPIKey())           → >0 if API key is resolved
+```
+
+Then run `FilterExistingDryRun` to preview classifications, or `FilterSelectedEmail` to test a single email.
+
 - LLM integration defaults to off (`RuntimeUseLLM = False`)
 - Learning folders (LearnKeep, LearnDelete, LearnSubjectDelete, LearnReply) must be manually created under Inbox
 - Web UI: `cd webui && python server.py` → `http://localhost:5000`
@@ -110,6 +142,7 @@ See [@docs/macros.md](docs/macros.md) for the full macro reference table.
 
 ## DO NOT
 
+- Do NOT remove/reimport modules without first running `StopCommandPollerStd` and `ThisOutlookSession.DisableRealTimeFilter` — the Win32 timer WILL crash Outlook
 - Do NOT add business logic to `Config.bas` — constants and Runtime variables only
 - Do NOT call `CallAzureOpenAICustom` in new code — use `CallLLM` instead
 - Do NOT assume `.SenderEmailAddress` returns SMTP — always use `GetSenderEmail(mail)`
