@@ -290,9 +290,9 @@ LearnReply=LearnReply
 
 [Patterns]
 ProtectedDomains=substack.com,reddit.com,redditmail.com
-NamePatterns=Xu Xin,XuXin,...
-GreetingPatterns=Dear Professor Xu,...
-PolyUTags=[MM],[HRO],[CUS],ToXX
+NamePatterns=Alex Smith,AlexSmith,...
+GreetingPatterns=Dear Professor Smith,...
+OrgTags=[DEPT1],[DEPT2],[DEPT3],ToAS
 VIPSubjectKeywords=thesis,dissertation,...
 DeleteSenderPatterns=notice,noreply,...
 DeleteKnownSenders=LinkedIn Job Alerts,...
@@ -447,14 +447,14 @@ See [macros.md](macros.md) for the complete reference. Key categories:
 
 ## Pattern Configuration
 
-Edit patterns in `settings.ini` under `[Patterns]` section. All patterns are comma-separated strings. Matching is **case-insensitive substring** for all patterns including PolyU tags.
+Edit patterns in `settings.ini` under `[Patterns]` section. All patterns are comma-separated strings. Matching is **case-insensitive substring** for all patterns including organizational tags.
 
 | Pattern Key | What It Controls | Matching |
 |-------------|-----------------|----------|
 | `ProtectedDomains` | Domains to never delete | Sender's domain contains pattern |
 | `NamePatterns` | Your name variations (keep if found) | Subject or body contains |
 | `GreetingPatterns` | Personal greetings (keep) | Body starts with pattern |
-| `PolyUTags` | Organizational tags (keep) | Subject contains |
+| `OrgTags` | Organizational tags (keep) | Subject contains |
 | `VIPSubjectKeywords` | Important subject keywords (keep) | Subject contains |
 | `DeleteSenderPatterns` | Spam email patterns (delete) | Sender email contains |
 | `DeleteKnownSenders` | Spam sender names (delete) | Sender display name contains |

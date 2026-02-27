@@ -12,7 +12,7 @@ All patterns are **comma-separated strings** stored as values in `settings.ini`:
 
 ```ini
 [Patterns]
-NamePatterns=Xu Xin,XuXin,Prof Xu,Professor Xu
+NamePatterns=Alex Smith,AlexSmith,Prof Smith,Professor Smith
 DeleteSubjectPatterns=offer,digest,newsletter,unsubscribe
 ```
 
@@ -47,13 +47,13 @@ ProtectedDomains=substack.com,reddit.com,redditmail.com
 If your **name** appears in the subject line or email body (first 200 chars), the email is kept.
 
 ```ini
-NamePatterns=Xu Xin,XuXin,Xuxin,Xin Xu,Professor Xu,Prof. Xu,Prof Xu,Dr. Xu,Dr Xu
+NamePatterns=Alex Smith,AlexSmith,Alexsmith,Smith Alex,Professor Smith,Prof. Smith,Prof Smith,Dr. Smith,Dr Smith
 ```
 
 **Include:**
-- Full name variations (Chinese order and Western order)
-- Title + last name (Prof. Xu, Dr. Xu)
-- Title + first name (Prof. Xin)
+- Full name variations (given name order and family name order)
+- Title + last name (Prof. Smith, Dr. Smith)
+- Title + first name (Prof. Alex)
 - Common misspellings or abbreviations
 
 > **Tip**: Use `GenerateAddressingPatterns` macro to let the LLM generate a comprehensive list from your name automatically.
@@ -65,7 +65,7 @@ NamePatterns=Xu Xin,XuXin,Xuxin,Xin Xu,Professor Xu,Prof. Xu,Prof Xu,Dr. Xu,Dr X
 If the email **body starts with** any of these greetings, it is kept.
 
 ```ini
-GreetingPatterns=Dear Professor Xu,Dear Prof. Xu,Dear Prof Xu,Dear Dr. Xu,Dear Dr Xu,Dear Xin,Hi Xin,Hello Xin,Dear Head,Dear Director
+GreetingPatterns=Dear Professor Smith,Dear Prof. Smith,Dear Prof Smith,Dear Dr. Smith,Dear Dr Smith,Dear Alex,Hi Alex,Hello Alex,Dear Head,Dear Director
 ```
 
 **Tips:**
@@ -75,12 +75,12 @@ GreetingPatterns=Dear Professor Xu,Dear Prof. Xu,Dear Prof Xu,Dear Dr. Xu,Dear D
 
 ---
 
-### 4. Organizational Tags (`PolyUTags`)
+### 4. Organizational Tags (`OrgTags`)
 
 Emails with these **tags in the subject** are kept.
 
 ```ini
-PolyUTags=[MM],[HRO],[CUS],ToXX
+OrgTags=[DEPT1],[DEPT2],[DEPT3],ToAS
 ```
 
 Matching is case-insensitive (same as all other patterns). Use for department/institution tags that identify internally-routed important emails.
@@ -153,7 +153,7 @@ Patterns are checked in this order. **First match wins.**
 | 0.5 | Learned subject | `learned_subjects.txt` (drag to LearnSubjectDelete) |
 | 1 | Protected domain | `ProtectedDomains` |
 | 2 | Personally addressed | `NamePatterns`, `GreetingPatterns` |
-| 3 | Organizational tags | `PolyUTags` |
+| 3 | Organizational tags | `OrgTags` |
 | 4 | VIP keywords | `VIPSubjectKeywords` |
 | 5 | Reply chain | Built-in (RE:, AW:) |
 | 6 | Forward chain | Built-in (FW:, FWD:, WG:) |
@@ -196,7 +196,7 @@ To test a specific pattern match interactively:
 ? ContainsAny("john@noreply.company.com", "noreply,no-reply,donotreply")
 ' Returns: True
 
-? ContainsAny("Dear Professor Xu, I hope", "Dear Professor Xu,Dear Prof")
+? ContainsAny("Dear Professor Smith, I hope", "Dear Professor Smith,Dear Prof")
 ' Returns: True
 ```
 
@@ -219,13 +219,13 @@ DeleteSenderPatterns=noreply,no-reply,donotreply
 ### Missing variations — won't catch all addressing forms
 
 ```ini
-; BAD: won't catch "Dr Xu" (no period)
-NamePatterns=Dr. Xu
+; BAD: won't catch "Dr Smith" (no period)
+NamePatterns=Dr. Smith
 ```
 
 ```ini
 ; GOOD: include both with and without period
-NamePatterns=Dr. Xu,Dr Xu,Prof. Xu,Prof Xu,Professor Xu
+NamePatterns=Dr. Smith,Dr Smith,Prof. Smith,Prof Smith,Professor Smith
 ```
 
 ### Greeting too short — will over-match
@@ -237,7 +237,7 @@ GreetingPatterns=Dear
 
 ```ini
 ; GOOD: include the name in the greeting
-GreetingPatterns=Dear Professor Xu,Dear Prof. Xu,Dear Xin,Hi Xin
+GreetingPatterns=Dear Professor Smith,Dear Prof. Smith,Dear Alex,Hi Alex
 ```
 
 ---

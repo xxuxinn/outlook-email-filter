@@ -127,9 +127,9 @@ LearnSubject=LearnSubjectDelete
 Comma-separated strings — case-insensitive substring match:
 ```ini
 ProtectedDomains=substack.com,reddit.com
-NamePatterns=Xu Xin,XuXin,Prof Xu
-GreetingPatterns=Dear Professor Xu,Dear Prof. Xu
-PolyUTags=[MM],[HRO],[CUS],ToXX
+NamePatterns=Alex Smith,AlexSmith,Prof Smith
+GreetingPatterns=Dear Professor Smith,Dear Prof. Smith
+OrgTags=[DEPT1],[DEPT2],[DEPT3],ToAS
 VIPSubjectKeywords=thesis,dissertation
 DeleteSenderPatterns=notice,noreply,no-reply
 DeleteSubjectPatterns=优惠,offer,digest,unsubscribe

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-VBA-based email agent for Outlook desktop (Windows only). Classifies emails via a priority rule chain with LLM fallback, learns from user feedback, and drafts replies. Designed for Professor Xu Xin at PolyU Hong Kong.
+VBA-based email agent for Outlook desktop (Windows only). Classifies emails via a priority rule chain with LLM fallback, learns from user feedback, and drafts replies. Designed for a professor at Example University.
 
 ## Architecture (v3.0)
 
@@ -48,7 +48,7 @@ VBA side of bridge: `GetCommandsDir()` + `WriteResultFile()` in Utilities.bas,
 7–9. Rule-based DELETE: known senders, sender patterns, subject patterns
 10. LLM_REVIEW → calls `CallLLM` if enabled, else moves to Review folder
 
-`ContainsAny()` is case-insensitive substring matching for all patterns including PolyU tags.
+`ContainsAny()` is case-insensitive substring matching for all patterns including organizational tags.
 
 ## Multi-Provider LLM (v3.0)
 

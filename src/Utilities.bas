@@ -947,7 +947,7 @@ Public Sub LoadAllSettings()
     RuntimeProtectedDomains = ReadINISetting("Patterns", "ProtectedDomains", DEFAULT_PROTECTED_DOMAINS)
     RuntimeNamePatterns = ReadINISetting("Patterns", "NamePatterns", DEFAULT_NAME_PATTERNS)
     RuntimeGreetingPatterns = ReadINISetting("Patterns", "GreetingPatterns", DEFAULT_GREETING_PATTERNS)
-    RuntimePolyUTags = ReadINISetting("Patterns", "PolyUTags", DEFAULT_POLYU_TAGS)
+    RuntimeOrgTags = ReadINISetting("Patterns", "OrgTags", DEFAULT_ORG_TAGS)
     RuntimeVIPKeywords = ReadINISetting("Patterns", "VIPSubjectKeywords", DEFAULT_VIP_SUBJECT_KEYWORDS)
     RuntimeDeleteSenderPatterns = ReadINISetting("Patterns", "DeleteSenderPatterns", DEFAULT_DELETE_SENDER_PATTERNS)
     RuntimeDeleteKnownSenders = ReadINISetting("Patterns", "DeleteKnownSenders", DEFAULT_DELETE_KNOWN_SENDERS)
@@ -1025,7 +1025,7 @@ Public Sub CreateDefaultSettingsFile()
     ts.WriteLine "ProtectedDomains=" & DEFAULT_PROTECTED_DOMAINS
     ts.WriteLine "NamePatterns=" & DEFAULT_NAME_PATTERNS
     ts.WriteLine "GreetingPatterns=" & DEFAULT_GREETING_PATTERNS
-    ts.WriteLine "PolyUTags=" & DEFAULT_POLYU_TAGS
+    ts.WriteLine "OrgTags=" & DEFAULT_ORG_TAGS
     ts.WriteLine "VIPSubjectKeywords=" & DEFAULT_VIP_SUBJECT_KEYWORDS
     ts.WriteLine "DeleteSenderPatterns=" & DEFAULT_DELETE_SENDER_PATTERNS
     ts.WriteLine "DeleteKnownSenders=" & DEFAULT_DELETE_KNOWN_SENDERS
@@ -2826,7 +2826,7 @@ Private Function DraftReplyToSelectedStd() As String
     Set mail = Application.ActiveExplorer.Selection(1)
     sSubject = mail.Subject
 
-    systemPrompt = "You are Professor Xu Xin at PolyU Hong Kong. Draft a professional, concise reply to the following email. " & _
+    systemPrompt = "You are a professor at Example University. Draft a professional, concise reply to the following email. " & _
                    "Be polite and to the point. If the email requires a specific action, acknowledge it. " & _
                    "Do not include a subject line in your reply."
 

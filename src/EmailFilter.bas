@@ -102,7 +102,7 @@ Public Function ClassifyEmail(ByVal mail As Outlook.MailItem) As String
     ' =========================================================================
     ' RULE 3: ORGANIZATIONAL TAGS - Keep
     ' =========================================================================
-    If ContainsAny(subject, RuntimePolyUTags) Then
+    If ContainsAny(subject, RuntimeOrgTags) Then
         ClassifyEmail = "KEEP"
         LogMessage "DEBUG", "  -> KEEP (org tag found)"
         Exit Function
@@ -502,7 +502,7 @@ Public Sub DraftReplyToSelected()
     Set mail = Application.ActiveExplorer.Selection(1)
     sSubject = mail.subject
 
-    systemPrompt = "You are Professor Xu Xin at PolyU Hong Kong. Draft a professional, concise reply to the following email. " & _
+    systemPrompt = "You are a professor at Example University. Draft a professional, concise reply to the following email. " & _
                    "Be polite and to the point. If the email requires a specific action, acknowledge it. " & _
                    "Do not include a subject line in your reply."
 

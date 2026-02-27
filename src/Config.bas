@@ -42,7 +42,7 @@ Public RuntimeFolderLearnSubject As String
 Public RuntimeProtectedDomains As String
 Public RuntimeNamePatterns As String
 Public RuntimeGreetingPatterns As String
-Public RuntimePolyUTags As String
+Public RuntimeOrgTags As String
 Public RuntimeVIPKeywords As String
 Public RuntimeDeleteSenderPatterns As String
 Public RuntimeDeleteKnownSenders As String
@@ -103,7 +103,7 @@ Public Const DEFAULT_OPENAI_COMPAT_MODEL As String = "qwen/qwen3-8b"
 Public Const DEFAULT_API_KEY_METHOD As String = "ENV"
 Public Const DEFAULT_API_KEY_ENV_VAR As String = "LLM_API_KEY"
 Public Const DEFAULT_API_KEY_HARDCODED As String = ""
-Public Const DEFAULT_LLM_SYSTEM_PROMPT As String = "You are filtering emails for Professor Xu Xin at PolyU Hong Kong. " & _
+Public Const DEFAULT_LLM_SYSTEM_PROMPT As String = "You are filtering emails for the professor at Example University. " & _
     "Respond with ONLY 'DELETE' or 'KEEP' followed by a brief reason (max 10 words). " & _
     "DELETE: Generic broadcasts, announcements, FYI-only, mass CC, admin notices, promotional, newsletters. " & _
     "KEEP: Personally addressed, requires action/response, from students/collaborators, important deadlines."
@@ -139,9 +139,9 @@ Public Const DEFAULT_PROTECTED_DOMAINS As String = "substack.com,reddit.com,redd
 Public Const DEFAULT_DELETE_SENDER_PATTERNS As String = "notice,noreply,notification,no-reply,marketing,promo,newsletter,digest,campaign,bulk,mailer,broadcast"
 Public Const DEFAULT_DELETE_KNOWN_SENDERS As String = "LinkedIn Job Alerts,edX,Cathay Pacific,HKBN,MyLink,WIRED Daily,Coursera,Udemy,Medium Daily Digest,Twitter,Facebook,Instagram,TikTok"
 Public Const DEFAULT_DELETE_SUBJECT_PATTERNS As String = "優惠,offer,digest,newsletter,unsubscribe,job alert,weekly roundup,daily digest,promotional,special offer,limited time,act now,don't miss"
-Public Const DEFAULT_NAME_PATTERNS As String = "Xu Xin,XuXin,Xuxin,Xin Xu,Professor Xu,Prof. Xu,Prof Xu,Dr. Xu,Dr Xu,Mr. Xu,Mr Xu"
-Public Const DEFAULT_GREETING_PATTERNS As String = "Dear Professor Xu,Dear Prof. Xu,Dear Prof Xu,Dear Dr. Xu,Dear Dr Xu,Dear Xin,Hi Xin,Hello Xin,Dear Head,Dear Director"
-Public Const DEFAULT_POLYU_TAGS As String = "[MM],[HRO],[CUS],ToXX"
+Public Const DEFAULT_NAME_PATTERNS As String = "Alex Smith,AlexSmith,Alexsmith,Smith Alex,Professor Smith,Prof. Smith,Prof Smith,Dr. Smith,Dr Smith,Mr. Smith,Mr Smith"
+Public Const DEFAULT_GREETING_PATTERNS As String = "Dear Professor Smith,Dear Prof. Smith,Dear Prof Smith,Dear Dr. Smith,Dear Dr Smith,Dear Alex,Hi Alex,Hello Alex,Dear Head,Dear Director"
+Public Const DEFAULT_ORG_TAGS As String = "[DEPT1],[DEPT2],[DEPT3],ToAS"
 Public Const DEFAULT_VIP_SUBJECT_KEYWORDS As String = "thesis,dissertation,supervision,urgent,deadline,review request,paper submission,grant,conference,publication,meeting request,appointment,interview"
 
 ' Logging defaults
