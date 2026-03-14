@@ -470,13 +470,11 @@ PROC_ERR:
     Resume PROC_EXIT
 End Sub
 
-' Draft a reply to the currently selected email using the LLM
+' Draft a reply to the currently selected email using the few-shot engine.
+' Delegates to DraftAutoReply (EmailAgent.bas) which uses learned reply
+' examples from learned_replies.txt for style-consistent drafting.
 Public Sub DraftReplyToSelected()
     Dim mail As Outlook.MailItem
-    Dim replyItem As Outlook.MailItem
-    Dim prompt As String
-    Dim draft As String
-    Dim systemPrompt As String
     Dim sSubject As String
 
     On Error GoTo PROC_ERR
@@ -502,32 +500,13 @@ Public Sub DraftReplyToSelected()
     Set mail = Application.ActiveExplorer.Selection(1)
     sSubject = mail.subject
 
-    systemPrompt = "You are Professor Xu Xin at PolyU Hong Kong. Draft a professional, concise reply to the following email. " & _
-                   "Be polite and to the point. If the email requires a specific action, acknowledge it. " & _
-                   "Do not include a subject line in your reply."
-
-    prompt = "Draft a reply to this email:" & vbCrLf & _
-             "From: " & mail.senderName & " <" & GetSenderEmail(mail) & ">" & vbCrLf & _
-             "Subject: " & sSubject & vbCrLf & _
-             "Date: " & Format(mail.ReceivedTime, "yyyy-mm-dd hh:nn") & vbCrLf & _
-             "Body:" & vbCrLf & Truncate(mail.Body, 2000)
-
-    draft = CallLLM(prompt, systemPrompt, RuntimeReplyMaxTokens, RuntimeReplyTemperature)
-
-    If Len(draft) = 0 Then
-        MsgBox "LLM returned no response. Check your API configuration.", vbExclamation, "Draft Reply"
-        GoTo PROC_EXIT
+    If DraftAutoReply(mail) Then
+        MsgBox "Draft reply saved to Drafts folder for:" & vbCrLf & _
+               Left(sSubject, 100), vbInformation, "Draft Reply"
+    Else
+        MsgBox "Could not draft reply. Check LLM configuration and logs.", _
+               vbExclamation, "Draft Reply"
     End If
-
-    ' Create the reply draft before showing MsgBox (mail reference is still fresh)
-    Set replyItem = mail.Reply
-    replyItem.Body = draft & vbCrLf & vbCrLf & replyItem.Body
-    replyItem.Save
-    Set replyItem = Nothing
-
-    MsgBox "Draft reply saved to Drafts folder." & vbCrLf & vbCrLf & Left(draft, 1000), vbInformation, "Draft Reply"
-
-    LogMessage "INFO", "Draft reply saved to Drafts for: " & Left(sSubject, 50)
 
 PROC_EXIT:
     PopCallStack

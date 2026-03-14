@@ -71,9 +71,9 @@ COMMAND_MAP = [
     (("scan sent", "learn from sent", "scan replies"),
      {"type": "macro", "macro": "ScanSentForReplyPatterns", "label": "Scanning sent items..."}),
 
-    # --- Draft replies batch ---
-    (("draft replies", "batch draft", "draft for inbox"),
-     {"type": "macro", "macro": "DraftRepliesForInbox", "label": "Drafting replies..."}),
+    # --- Draft replies for selected ---
+    (("draft replies", "draft reply", "draft for selected"),
+     {"type": "macro", "macro": "DraftReplyForSelected", "label": "Drafting replies for selected email(s)..."}),
 
     # --- Restore ---
     (("restore review", "restore from review"),
@@ -96,7 +96,7 @@ HELP_TEXT = """Available commands:
 • **provider local/azure/claude/openai** — switch LLM provider
 • **enable/disable llm** — toggle LLM on/off
 • **scan sent** — scan Sent Items for reply patterns
-• **draft replies** — batch draft replies for unread KEEP emails
+• **draft replies** — draft few-shot replies for selected email(s)
 • **restore review** — move Review folder emails back to Inbox"""
 
 

@@ -1809,12 +1809,87 @@ Public Function SanitizeSubject(ByVal subject As String) As String
     SanitizeSubject = Trim(result)
 End Function
 
-' Record a learned subject rule: append to file and update cache
+' Extract a generalized pattern from a subject by stripping variable parts
+' (unique codes, reference numbers, dates, ticket IDs) so that one learned
+' rule matches all future emails with the same template.
+'
+' Examples:
+'   "Funding Application Submitted For Your Information Only (A0061323)"
+'     -> "Funding Application Submitted For Your Information Only"
+'   "Your Order #WX-98234 Has Been Shipped"
+'     -> "Your Order Has Been Shipped"
+'   "[TICKET-4521] Server maintenance scheduled 2026-03-14"
+'     -> "Server maintenance scheduled"
+'   "Re: Invoice INV-2026-0042 Payment Confirmation"
+'     -> "Re: Invoice Payment Confirmation"
+Public Function ExtractSubjectPattern(ByVal subject As String) As String
+    Dim re As Object
+    Dim result As String
+
+    result = subject
+
+    Set re = CreateObject("VBScript.RegExp")
+    re.Global = True
+    re.IgnoreCase = True
+
+    ' 1. Remove parenthesized codes: (A0061323), (REF-123), (2026-03-14), etc.
+    '    Matches ( + alphanumeric/dash/dot/space content + )
+    re.Pattern = "\s*\([A-Za-z0-9][A-Za-z0-9\-\./ ]*\)"
+    result = re.Replace(result, "")
+
+    ' 2. Remove bracketed codes: [TICKET-4521], [REF:123], [ID-ABC-99], etc.
+    '    but preserve org tags like [MM], [HRO], [CUS] (2-4 uppercase letters only)
+    re.Pattern = "\s*\[[A-Za-z0-9][A-Za-z0-9\-\.:/ ]*[0-9][A-Za-z0-9\-\.:/ ]*\]"
+    result = re.Replace(result, "")
+
+    ' 3. Remove standalone reference codes: INV-2026-0042, WX-98234, REF12345, etc.
+    '    Pattern: 1-5 letters + optional separator + 3+ digits + optional suffix
+    re.Pattern = "\b[A-Za-z]{1,5}[\-:#]?\d{3,}[\-\.\w]*\b"
+    result = re.Replace(result, "")
+
+    ' 4. Remove standalone pure numbers (5+ digits): 1234567, 00987654
+    re.Pattern = "\b\d{5,}\b"
+    result = re.Replace(result, "")
+
+    ' 5. Remove dates: 2026-03-14, 14/03/2026, 03.14.2026, Mar 14 2026, etc.
+    re.Pattern = "\b\d{4}[\-/\.]\d{1,2}[\-/\.]\d{1,2}\b"
+    result = re.Replace(result, "")
+    re.Pattern = "\b\d{1,2}[\-/\.]\d{1,2}[\-/\.]\d{2,4}\b"
+    result = re.Replace(result, "")
+    re.Pattern = "\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{1,2},?\s+\d{4}\b"
+    result = re.Replace(result, "")
+
+    ' 6. Remove trailing/leading hyphens and colons left by stripped codes
+    re.Pattern = "\s+[\-:]+\s+"
+    result = re.Replace(result, " ")
+    re.Pattern = "[\-:]+\s*$"
+    result = re.Replace(result, "")
+
+    ' 7. Collapse multiple spaces
+    re.Pattern = "\s{2,}"
+    result = re.Replace(result, " ")
+
+    Set re = Nothing
+
+    result = Trim(result)
+
+    ' If pattern extraction stripped too much (less than 8 chars), fall back to original
+    If Len(result) < 8 Then
+        result = subject
+    End If
+
+    ExtractSubjectPattern = result
+End Function
+
+' Record a learned subject rule: extract a generalized pattern from the subject,
+' append to file and update cache. Variable parts (codes, IDs, dates) are stripped
+' so that one rule matches all future emails with the same template.
 Public Sub RecordLearnedSubject(ByVal subject As String, ByVal action As String)
     Dim filePath As String
     Dim fso As Object
     Dim ts As Object
     Dim trimmedSubject As String
+    Dim patternSubject As String
     Dim timestamp As String
 
     trimmedSubject = SanitizeSubject(subject)
@@ -1830,11 +1905,20 @@ Public Sub RecordLearnedSubject(ByVal subject As String, ByVal action As String)
         Exit Sub
     End If
 
+    ' Extract generalized pattern (strip unique codes, IDs, dates)
+    patternSubject = SanitizeSubject(ExtractSubjectPattern(trimmedSubject))
+
     ' Ensure cache is loaded
     If Not learnedSubjectsCacheLoaded Then LoadLearnedSubjects
 
-    ' Update in-memory cache
-    learnedSubjectsCache(trimmedSubject) = action
+    ' Skip if this pattern is already in cache (avoid duplicate rules)
+    If learnedSubjectsCache.Exists(patternSubject) Then
+        LogMessage "INFO", "LEARNED SUBJECT pattern already exists: " & Left(patternSubject, 50)
+        Exit Sub
+    End If
+
+    ' Update in-memory cache with the pattern (not the verbatim subject)
+    learnedSubjectsCache(patternSubject) = action
 
     ' Append to file (with error handling to prevent leaked file handles)
     filePath = GetLearnedSubjectsFilePath()
@@ -1843,13 +1927,18 @@ Public Sub RecordLearnedSubject(ByVal subject As String, ByVal action As String)
     On Error GoTo FileError
     Set fso = CreateObject("Scripting.FileSystemObject")
     Set ts = fso.OpenTextFile(filePath, 8, True)  ' 8 = ForAppending, True = Create if missing
-    ts.WriteLine trimmedSubject & "|" & action & "|" & timestamp
+    ts.WriteLine patternSubject & "|" & action & "|" & timestamp
     ts.Close
     Set ts = Nothing
     Set fso = Nothing
     On Error GoTo 0
 
-    LogMessage "INFO", "LEARNED SUBJECT " & action & " recorded for: " & Left(trimmedSubject, 50)
+    If patternSubject <> trimmedSubject Then
+        LogMessage "INFO", "LEARNED SUBJECT " & action & " pattern: " & Left(patternSubject, 50) & _
+                   " (from: " & Left(trimmedSubject, 50) & ")"
+    Else
+        LogMessage "INFO", "LEARNED SUBJECT " & action & " recorded for: " & Left(trimmedSubject, 50)
+    End If
 
     Exit Sub
 
@@ -2564,9 +2653,9 @@ Private Function DispatchMacroStd(ByVal macroName As String, Optional ByVal rawJ
             EmailAgent.ScanSentForReplyPatterns
             result = "Sent items scan complete."
 
-        Case "DraftRepliesForInbox"
-            EmailAgent.DraftRepliesForInbox
-            result = "Draft replies complete."
+        Case "DraftReplyForSelected"
+            result = DraftReplyForSelectedStd()
+
 
         Case "ShowLearnedSenders"
             result = "Learned sender rules: " & GetLearnedSendersCount() & vbCrLf & _
@@ -2798,15 +2887,10 @@ StdErr:
     SummarizeSelectedEmailStd = "ERROR: SummarizeSelectedEmail failed: " & Err.Description
 End Function
 
-' Bridge-friendly DraftReplyToSelected — returns result string, saves draft, no MsgBox
+' Bridge-friendly DraftReplyToSelected — returns result string, saves draft via DraftAutoReply, no MsgBox
 Private Function DraftReplyToSelectedStd() As String
     On Error GoTo StdErr
     Dim mail As Outlook.MailItem
-    Dim replyItem As Outlook.MailItem
-    Dim prompt As String
-    Dim draft As String
-    Dim systemPrompt As String
-    Dim sSubject As String
 
     If Not RuntimeUseLLM Then
         DraftReplyToSelectedStd = "ERROR: LLM is not enabled. Set UseLLMAPI=True in settings."
@@ -2824,34 +2908,56 @@ Private Function DraftReplyToSelectedStd() As String
     End If
 
     Set mail = Application.ActiveExplorer.Selection(1)
-    sSubject = mail.Subject
 
-    systemPrompt = "You are Professor Xu Xin at PolyU Hong Kong. Draft a professional, concise reply to the following email. " & _
-                   "Be polite and to the point. If the email requires a specific action, acknowledge it. " & _
-                   "Do not include a subject line in your reply."
-
-    prompt = "Draft a reply to this email:" & vbCrLf & _
-             "From: " & mail.SenderName & " <" & GetSenderEmail(mail) & ">" & vbCrLf & _
-             "Subject: " & sSubject & vbCrLf & _
-             "Date: " & Format(mail.ReceivedTime, "yyyy-mm-dd hh:nn") & vbCrLf & _
-             "Body:" & vbCrLf & Truncate(mail.Body, 2000)
-
-    draft = CallLLM(prompt, systemPrompt, RuntimeReplyMaxTokens, RuntimeReplyTemperature)
-
-    If Len(draft) = 0 Then
-        DraftReplyToSelectedStd = "ERROR: LLM returned no response. Check your API configuration."
-        Exit Function
+    If DraftAutoReply(mail) Then
+        DraftReplyToSelectedStd = "Draft reply saved to Drafts for: " & mail.Subject
+    Else
+        DraftReplyToSelectedStd = "ERROR: Could not draft reply. Check LLM configuration and logs."
     End If
-
-    ' Save as actual draft in Outlook Drafts folder
-    Set replyItem = mail.Reply
-    replyItem.Body = draft & vbCrLf & vbCrLf & replyItem.Body
-    replyItem.Save
-    Set replyItem = Nothing
-
-    LogMessage "INFO", "Draft reply saved to Drafts for: " & Left(sSubject, 50)
-    DraftReplyToSelectedStd = "Draft reply saved to Drafts for: " & sSubject & vbCrLf & vbCrLf & draft
     Exit Function
 StdErr:
     DraftReplyToSelectedStd = "ERROR: DraftReplyToSelected failed: " & Err.Description
+End Function
+
+' Bridge-friendly DraftReplyForSelected — drafts replies for all selected emails, no MsgBox
+Private Function DraftReplyForSelectedStd() As String
+    On Error GoTo StdErr
+    Dim sel As Outlook.Selection
+    Dim mail As Outlook.MailItem
+    Dim i As Long
+    Dim draftedCount As Long
+    Dim skippedCount As Long
+
+    If Not RuntimeUseLLM Then
+        DraftReplyForSelectedStd = "ERROR: LLM is not enabled. Set UseLLMAPI=True in settings."
+        Exit Function
+    End If
+
+    Set sel = Application.ActiveExplorer.Selection
+
+    If sel.Count = 0 Then
+        DraftReplyForSelectedStd = "ERROR: No email selected. Please select one or more emails in Outlook first."
+        Exit Function
+    End If
+
+    draftedCount = 0
+    skippedCount = 0
+
+    For i = 1 To sel.Count
+        If Not TypeOf sel(i) Is Outlook.MailItem Then
+            skippedCount = skippedCount + 1
+        Else
+            Set mail = sel(i)
+            If DraftAutoReply(mail) Then
+                draftedCount = draftedCount + 1
+            Else
+                skippedCount = skippedCount + 1
+            End If
+        End If
+    Next i
+
+    DraftReplyForSelectedStd = "Draft replies complete. Drafted: " & draftedCount & ", Skipped: " & skippedCount & ". Check your Drafts folder."
+    Exit Function
+StdErr:
+    DraftReplyForSelectedStd = "ERROR: DraftReplyForSelected failed: " & Err.Description
 End Function

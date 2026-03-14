@@ -225,11 +225,11 @@ const MACROS = [
   // Agent Tools
   { name: 'GenerateAddressingPatterns', desc: 'LLM-generate name/greeting patterns', cat: 'Agent Tools' },
   { name: 'ScanSentForReplyPatterns', desc: 'Learn reply style from Sent Items', cat: 'Agent Tools' },
-  { name: 'DraftRepliesForInbox', desc: 'Batch draft replies for unread KEEP emails', cat: 'Agent Tools' },
+  { name: 'DraftReplyForSelected', desc: 'Draft few-shot replies for selected email(s)', cat: 'Agent Tools' },
   { name: 'ShowLearnedRepliesSummary', desc: 'Show learned reply pair count', cat: 'Agent Tools' },
   // LLM Tools
   { name: 'SummarizeSelectedEmail', desc: 'Summarize selected email using LLM', cat: 'LLM Tools' },
-  { name: 'DraftReplyToSelected', desc: 'Draft reply to selected email using LLM', cat: 'LLM Tools' },
+  { name: 'DraftReplyToSelected', desc: 'Draft reply to selected email (few-shot)', cat: 'LLM Tools' },
   // Learned Rules
   { name: 'ShowLearnedSenders', desc: 'Show learned sender rule count', cat: 'Learned Rules' },
   { name: 'ShowLearnedSendersList', desc: 'Dump sender rules to Immediate Window', cat: 'Learned Rules' },

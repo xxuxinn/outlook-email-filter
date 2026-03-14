@@ -2,7 +2,7 @@
 
 Full list of callable macros. Assign frequently used ones to the Quick Access Toolbar (QAT) via File → Options → Quick Access Toolbar → Macros.
 
-**Recommended QAT buttons**: `FilterSelectedEmails`, `FilterCurrentFolder`, `FilterExistingDryRun`
+**Recommended QAT buttons**: `FilterSelectedEmails`, `FilterCurrentFolder`, `FilterExistingDryRun`, `DraftReplyForSelected`, `ExportLearnedRulesToServer`
 
 ## Version
 
@@ -31,7 +31,7 @@ Full list of callable macros. Assign frequently used ones to the Quick Access To
 |-------|---------|
 | `GenerateAddressingPatterns` | LLM-generates name/greeting patterns from inputted name |
 | `ScanSentForReplyPatterns` | Scans Sent Items for reply pairs → `learned_replies.txt` |
-| `DraftRepliesForInbox` | Batch draft replies for unread KEEP emails in Inbox |
+| `DraftReplyForSelected` | Draft few-shot replies for selected email(s) → Drafts folder |
 | `ShowLearnedRepliesSummary` | Show learned reply pair count and file path |
 
 ## LLM Tools
@@ -39,7 +39,7 @@ Full list of callable macros. Assign frequently used ones to the Quick Access To
 | Macro | Purpose |
 |-------|---------|
 | `SummarizeSelectedEmail` | Summarize selected email using LLM |
-| `DraftReplyToSelected` | Draft a reply using LLM (few-shot style if replies learned) |
+| `DraftReplyToSelected` | Draft a reply using LLM few-shot engine (delegates to `DraftAutoReply`) |
 
 > **Note**: `SummarizeSelectedEmail` and `DraftReplyToSelected` have bridge-friendly `*Std()` variants in Utilities.bas (`SummarizeSelectedEmailStd`, `DraftReplyToSelectedStd`) that are called automatically from the Web UI command bridge.
 

@@ -5,7 +5,7 @@
 '   - GenerateAddressingPatterns: LLM-generates personal addressing patterns
 '   - DraftAutoReply: Few-shot reply drafting using learned_replies.txt examples
 '   - ScanSentForReplyPatterns: Bulk-imports reply pairs from Sent Items
-'   - DraftRepliesForInbox: Batch auto-draft replies for unread KEEP emails
+'   - DraftReplyForSelected: Draft replies for selected email(s) via few-shot engine
 '
 ' Depends on:
 '   - CallLLM (Utilities.bas) for all LLM calls
@@ -486,81 +486,74 @@ Private Function ExtractOriginalBodySnippet(ByVal body As String) As String
 End Function
 
 '-------------------------------------------------------------------------------
-' BATCH AUTO-REPLY FOR INBOX
+' DRAFT REPLY FOR SELECTED EMAILS
 '-------------------------------------------------------------------------------
 
-' Scan Inbox for unread KEEP emails and draft replies for all of them.
-' Use this for bulk reply-drafting on a batch of new emails.
-Public Sub DraftRepliesForInbox()
+' Draft few-shot replies for the currently selected email(s).
+' Uses DraftAutoReply (learned reply examples from learned_replies.txt).
+' Assign to QAT for one-click reply drafting.
+Public Sub DraftReplyForSelected()
     On Error GoTo PROC_ERR
-    PushCallStack "EmailAgent.DraftRepliesForInbox"
-
-    If Not RuntimeEnableAutoReply Then
-        MsgBox "Auto-reply is disabled. Set EnableAutoReply=True in settings.ini [Agent] section.", _
-               vbExclamation, "Draft Replies"
-        GoTo PROC_EXIT
-    End If
+    PushCallStack "EmailAgent.DraftReplyForSelected"
 
     If Not RuntimeUseLLM Then
-        MsgBox "LLM must be enabled for auto-reply drafting.", vbExclamation, "Draft Replies"
+        MsgBox "LLM must be enabled for reply drafting." & vbCrLf & _
+               "Set UseLLMAPI=True in settings.ini.", _
+               vbExclamation, "Draft Reply"
         GoTo PROC_EXIT
     End If
 
-    Dim inbox As Outlook.Folder
-    Dim myItems As Outlook.Items
-    Dim mail As Outlook.MailItem
+    Dim sel As Outlook.Selection
+    Set sel = Application.ActiveExplorer.Selection
+
+    If sel.Count = 0 Then
+        MsgBox "Please select one or more emails first.", vbExclamation, "Draft Reply"
+        GoTo PROC_EXIT
+    End If
+
+    Dim confirm As VbMsgBoxResult
+    confirm = MsgBox("Draft LLM replies for " & sel.Count & " selected email(s)?" & vbCrLf & _
+                     "Drafts will be saved to your Drafts folder.", _
+                     vbYesNo + vbQuestion, "Draft Reply")
+    If confirm = vbNo Then GoTo PROC_EXIT
+
     Dim i As Long
     Dim draftedCount As Long
     Dim skippedCount As Long
-
-    Set inbox = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox)
-    Set myItems = inbox.Items
-    myItems.Sort "[ReceivedTime]", True  ' Newest first
+    Dim mail As Outlook.MailItem
 
     draftedCount = 0
     skippedCount = 0
 
-    Dim confirm As VbMsgBoxResult
-    confirm = MsgBox("This will draft LLM replies for all unread KEEP emails in your Inbox." & vbCrLf & _
-                     "Drafts will be saved to your Drafts folder." & vbCrLf & vbCrLf & _
-                     "Continue?", vbYesNo + vbQuestion, "Draft Replies for Inbox")
-    If confirm = vbNo Then GoTo PROC_EXIT
+    For i = 1 To sel.Count
+        If Not TypeOf sel(i) Is Outlook.MailItem Then
+            skippedCount = skippedCount + 1
+            GoTo NextSelectedItem
+        End If
 
-    For i = 1 To myItems.Count
-        If Not TypeOf myItems(i) Is Outlook.MailItem Then GoTo NextInboxItem
+        Set mail = sel(i)
 
-        Set mail = myItems(i)
-
-        ' Only unread emails
-        If Not mail.UnRead Then GoTo NextInboxItem
-
-        ' Only KEEP decisions
-        Dim decision As String
-        decision = ClassifyEmail(mail)
-        If decision <> "KEEP" Then GoTo NextInboxItem
-
-        ' Draft the reply
         If DraftAutoReply(mail) Then
             draftedCount = draftedCount + 1
         Else
             skippedCount = skippedCount + 1
         End If
 
-NextInboxItem:
+NextSelectedItem:
     Next i
 
     MsgBox "Done." & vbCrLf & vbCrLf & _
            "Drafted: " & draftedCount & " replies" & vbCrLf & _
            "Skipped: " & skippedCount & vbCrLf & vbCrLf & _
            "Check your Drafts folder.", _
-           vbInformation, "Draft Replies for Inbox"
+           vbInformation, "Draft Reply"
 
 PROC_EXIT:
     PopCallStack
     Exit Sub
 PROC_ERR:
-    LogError "EmailAgent", "DraftRepliesForInbox", Err.Number, Err.Description
-    MsgBox "Error drafting replies: " & Err.Description, vbCritical, "Draft Replies"
+    LogError "EmailAgent", "DraftReplyForSelected", Err.Number, Err.Description
+    MsgBox "Error drafting replies: " & Err.Description, vbCritical, "Draft Reply"
     Resume PROC_EXIT
 End Sub
 
