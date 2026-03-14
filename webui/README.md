@@ -94,11 +94,14 @@ The poller is in `src/Utilities.bas`:
 | show version / status | Run ShowVersionInfo |
 | show senders | View learned sender rules |
 | show subjects | View learned subject rules |
+| show replies | View learned reply examples |
 | show errors | View error log |
 | reload settings | Send ReinitializeFilter |
 | provider local/azure/claude/openai | Switch LLM provider |
 | enable/disable llm | Toggle LLM on/off |
 | scan sent | ScanSentForReplyPatterns |
+| draft replies / batch draft | Run DraftRepliesForInbox |
+| restore review | Run RestoreFromReview |
 | help | Show available commands |
 
 ## Environment Variables

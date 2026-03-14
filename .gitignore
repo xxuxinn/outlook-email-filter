@@ -17,6 +17,10 @@
 *.pst
 *.ost
 
+# Python bytecode
+__pycache__/
+*.pyc
+
 # Environment/secrets
 .env
 *.key
