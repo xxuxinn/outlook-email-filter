@@ -19,7 +19,7 @@ Full list of callable macros. Assign frequently used ones to the Quick Access To
 | `FilterAllFolders` | Filter Inbox + Other + PST archives |
 | `FilterSelectedEmail` | Test classification on one selected email (prompts before acting) |
 | `FilterSelectedEmails` | Filter selected email(s) with confirmation |
-| `FilterCurrentFolder` | Filter current folder with confirmation |
+| `FilterCurrentFolder` | Filter current folder with confirmation (Review folder: DELETE-only mode, non-DELETE emails stay in Review) |
 | `FilterLastNDays 7` | Filter last N days (change 7 to any number) |
 | `GenerateClassificationReport` | Count classifications without acting |
 | `BulkDeleteBySender "pattern"` | Delete all from matching senders |

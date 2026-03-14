@@ -843,6 +843,7 @@ Public Sub FilterCurrentFolder()
     Dim i As Long
     Dim response As VbMsgBoxResult
     Dim isNonInbox As Boolean
+    Dim isReviewFolder As Boolean
     Dim senderName As String
     Dim subject As String
 
@@ -864,11 +865,19 @@ Public Sub FilterCurrentFolder()
 
     Set inbox = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox)
     isNonInbox = (folder.EntryID <> inbox.EntryID)
+    isReviewFolder = (folder.Name = RuntimeFolderReview)
 
     Set myItems = folder.Items
 
     ' Confirmation dialog (different message for non-Inbox folders)
-    If isNonInbox Then
+    If isReviewFolder Then
+        response = MsgBox("Filter Review folder?" & vbCrLf & _
+                          "(" & myItems.Count & " items)" & vbCrLf & vbCrLf & _
+                          "Review folder detected." & vbCrLf & _
+                          "Only DELETE rules will be applied." & vbCrLf & _
+                          "Non-DELETE emails will stay in Review.", _
+                          vbYesNo + vbQuestion, "Filter This Folder")
+    ElseIf isNonInbox Then
         response = MsgBox("Filter folder '" & folder.Name & "'?" & vbCrLf & _
                           "(" & myItems.Count & " items)" & vbCrLf & vbCrLf & _
                           "Non-Inbox folder detected." & vbCrLf & _
@@ -887,7 +896,7 @@ Public Sub FilterCurrentFolder()
     Set stats = CreateStatsDict()
 
     LogMessage "INFO", "Filtering folder '" & folder.Name & "' (" & myItems.Count & " items)" & _
-               IIf(isNonInbox, " [non-Inbox: KEEP->Inbox]", "")
+               IIf(isReviewFolder, " [Review: DELETE-only mode]", IIf(isNonInbox, " [non-Inbox: KEEP->Inbox]", ""))
 
     For i = myItems.Count To 1 Step -1
         If TypeOf myItems(i) Is Outlook.MailItem Then
@@ -895,12 +904,20 @@ Public Sub FilterCurrentFolder()
             decision = ClassifyEmail(mail)
 
             If isNonInbox And decision <> "DELETE" Then
-                ' Non-Inbox folder: move non-DELETE emails back to Inbox
-                senderName = mail.senderName
-                subject = mail.subject
-                mail.Move inbox
-                LogActionDirect senderName, subject, "MOVED to Inbox (was " & decision & ")"
-                IncrementStat stats, "KEEP"
+                If isReviewFolder Then
+                    ' Review folder: leave non-DELETE emails in place
+                    senderName = mail.senderName
+                    subject = mail.subject
+                    LogActionDirect senderName, subject, "KEPT in Review (was " & decision & ")"
+                    IncrementStat stats, "KEEP"
+                Else
+                    ' Other non-Inbox folders: move to Inbox as before
+                    senderName = mail.senderName
+                    subject = mail.subject
+                    mail.Move inbox
+                    LogActionDirect senderName, subject, "MOVED to Inbox (was " & decision & ")"
+                    IncrementStat stats, "KEEP"
+                End If
             Else
                 ExecuteAction mail, decision, stats
             End If

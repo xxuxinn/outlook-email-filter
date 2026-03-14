@@ -50,6 +50,8 @@ VBA side of bridge: `GetCommandsDir()` + `WriteResultFile()` in Utilities.bas,
 
 `ContainsAny()` is case-insensitive substring matching for all patterns including PolyU tags.
 
+**Review folder special handling**: `FilterCurrentFolder` detects when run on the Review folder and switches to DELETE-only mode — non-DELETE emails stay in Review instead of moving to Inbox. This prevents ambiguous emails (which fell through to Rule 10) from cycling back to Inbox on re-classification.
+
 ## Multi-Provider LLM (v3.0)
 
 `CallLLM(userPrompt, systemPrompt, maxTokens, [temperature])` in Utilities.bas routes to:
