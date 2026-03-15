@@ -89,6 +89,9 @@ Private Sub Application_Startup()
         End If
     End If
 
+    ' Auto-sync learned rules with cloud on startup (silent, skips if unavailable)
+    SyncLearnedRulesAuto
+
     LogMessage "INFO", "Email Agent v" & FILTER_VERSION & " initialized"
 
 PROC_EXIT:
@@ -97,6 +100,31 @@ PROC_EXIT:
 
 PROC_ERR:
     LogError "ThisOutlookSession", "Application_Startup", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+'-------------------------------------------------------------------------------
+' APPLICATION QUIT - Auto-sync learned rules to cloud before closing
+'-------------------------------------------------------------------------------
+
+Private Sub Application_Quit()
+    On Error GoTo PROC_ERR
+    PushCallStack "ThisOutlookSession.Application_Quit"
+
+    ' Stop command poller timer before shutdown
+    StopCommandPollerStd
+
+    ' Auto-sync learned rules to cloud (silent, skips if unavailable)
+    SyncLearnedRulesAuto
+
+    LogMessage "INFO", "Email Agent v" & FILTER_VERSION & " shutting down"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+
+PROC_ERR:
+    LogError "ThisOutlookSession", "Application_Quit", Err.Number, Err.Description
     Resume PROC_EXIT
 End Sub
 

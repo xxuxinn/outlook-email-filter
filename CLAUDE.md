@@ -36,7 +36,7 @@ VBA side of bridge: `GetCommandsDir()` + `WriteResultFile()` in Utilities.bas,
 
 - `DEFAULT_*` constants in `Config.bas` — compile-time fallbacks, never change at runtime
 - `Runtime*` variables in `Config.bas` — loaded from `settings.ini` at startup via `LoadAllSettings`
-- Settings file: `%APPDATA%\OutlookEmailFilter\settings.ini` (sections: General, Folders, Patterns, LLM, Agent)
+- Settings file: `%APPDATA%\OutlookEmailFilter\settings.ini` (sections: General, Folders, Patterns, LLM, Agent, Sync)
 - `LoadAllSettings` MUST be the first call in `Application_Startup`
 - New settings require: add DEFAULT const + Runtime var + LoadAllSettings entry + CreateDefaultSettingsFile entry
 
@@ -51,6 +51,15 @@ VBA side of bridge: `GetCommandsDir()` + `WriteResultFile()` in Utilities.bas,
 `ContainsAny()` is case-insensitive substring matching for all patterns including PolyU tags.
 
 **Review folder special handling**: `FilterCurrentFolder` detects when run on the Review folder and switches to DELETE-only mode — non-DELETE emails stay in Review instead of moving to Inbox. This prevents ambiguous emails (which fell through to Rule 10) from cycling back to Inbox on re-classification.
+
+## Cloud Sync
+
+`SyncLearnedRules` in Utilities.bas syncs `learned_senders.txt`, `learned_subjects.txt`, and `learned_replies.txt` bidirectionally with a cloud folder (OneDrive, Google Drive, etc.). Configured via `[Sync]` section in settings.ini:
+- `EnableCloudSync=True` to enable
+- `CloudSyncPath=C:\Users\...\OneDrive - ...` — path to the cloud-synced root folder
+- Sync subfolder: `<CloudSyncPath>\OutlookEmailFilter\` (auto-created)
+
+Merge logic: both files are read into dictionaries, conflicts resolved by timestamp (later wins), merged result written to both local and cloud. After sync, both copies are identical. `SyncLearnedRulesAuto` runs silently on `Application_Startup` and `Application_Quit` — if OneDrive is unavailable, it logs a warning and falls back to local rules. Manual `SyncLearnedRules` macro shows a MsgBox summary.
 
 ## Multi-Provider LLM (v3.0)
 

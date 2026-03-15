@@ -79,6 +79,10 @@ Public RuntimeScanSentItems As Boolean
 Public RuntimeScanSentDays As Integer
 Public RuntimeAutoReplyForSenders As String
 
+' Cloud sync
+Public RuntimeEnableCloudSync As Boolean
+Public RuntimeCloudSyncPath As String
+
 ' Error handling / debug
 Public RuntimeDebugMode As Boolean           ' Show MsgBox on errors when True
 Public RuntimeErrorLogFile As String         ' Full path to error.log (set at runtime)
@@ -123,6 +127,10 @@ Public Const DEFAULT_REPLY_PERSONA As String = ""
 Public Const DEFAULT_SCAN_SENT_ITEMS As Boolean = False
 Public Const DEFAULT_SCAN_SENT_DAYS As Integer = 30
 Public Const DEFAULT_AUTO_REPLY_FOR_SENDERS As String = ""
+
+' Cloud sync defaults
+Public Const DEFAULT_ENABLE_CLOUD_SYNC As Boolean = False
+Public Const DEFAULT_CLOUD_SYNC_PATH As String = ""
 
 ' Debug / error handling defaults
 Public Const DEFAULT_DEBUG_MODE As Boolean = False

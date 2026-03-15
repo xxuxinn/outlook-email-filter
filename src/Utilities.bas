@@ -984,6 +984,10 @@ Public Sub LoadAllSettings()
     RuntimeScanSentDays = ReadINIInt("Agent", "ScanSentDays", DEFAULT_SCAN_SENT_DAYS)
     RuntimeAutoReplyForSenders = ReadINISetting("Agent", "AutoReplyForSenders", DEFAULT_AUTO_REPLY_FOR_SENDERS)
 
+    ' --- Sync ---
+    RuntimeEnableCloudSync = ReadINIBool("Sync", "EnableCloudSync", DEFAULT_ENABLE_CLOUD_SYNC)
+    RuntimeCloudSyncPath = ReadINISetting("Sync", "CloudSyncPath", DEFAULT_CLOUD_SYNC_PATH)
+
     ' --- Debug / Error handling ---
     RuntimeDebugMode = ReadINIBool("General", "DebugMode", DEFAULT_DEBUG_MODE)
     RuntimeErrorLogFile = Environ("APPDATA") & "\" & LEARNED_DATA_FOLDER & "\" & ERROR_LOG_FILE_NAME
@@ -1062,6 +1066,11 @@ Public Sub CreateDefaultSettingsFile()
     ts.WriteLine "ScanSentItems=" & IIf(DEFAULT_SCAN_SENT_ITEMS, "True", "False")
     ts.WriteLine "ScanSentDays=" & DEFAULT_SCAN_SENT_DAYS
     ts.WriteLine "AutoReplyForSenders=" & DEFAULT_AUTO_REPLY_FOR_SENDERS
+    ts.WriteLine ""
+    ts.WriteLine "[Sync]"
+    ts.WriteLine "EnableCloudSync=" & IIf(DEFAULT_ENABLE_CLOUD_SYNC, "True", "False")
+    ts.WriteLine "; Path to shared cloud folder (OneDrive, Google Drive, etc.)"
+    ts.WriteLine "CloudSyncPath=" & DEFAULT_CLOUD_SYNC_PATH
 
     ts.Close
     Set ts = Nothing
@@ -2061,6 +2070,463 @@ Public Sub DeduplicateLearnedSubjects()
 End Sub
 
 '-------------------------------------------------------------------------------
+' CLOUD SYNC - Merge learned rules with a cloud folder (OneDrive, etc.)
+'-------------------------------------------------------------------------------
+
+' Parse the timestamp (3rd pipe-delimited field) from a learned rule line.
+' Returns "1900-01-01 00:00:00" if no timestamp field is found.
+Private Function ParseTimestamp(ByVal pipeLine As String) As String
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.ParseTimestamp"
+
+    ' Timestamp is always the LAST pipe-delimited field in all formats:
+    '   senders:  email|action|timestamp (index 2)
+    '   subjects: subject|action|timestamp (index 2)
+    '   replies:  subject|from|orig_body|reply_body|timestamp (index 4)
+    Dim parts() As String
+    parts = Split(pipeLine, "|")
+    If UBound(parts) >= 2 Then
+        ParseTimestamp = Trim(parts(UBound(parts)))
+        If Len(ParseTimestamp) = 0 Then ParseTimestamp = "1900-01-01 00:00:00"
+    Else
+        ParseTimestamp = "1900-01-01 00:00:00"
+    End If
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "Utilities", "ParseTimestamp", Err.Number, Err.Description
+    ParseTimestamp = "1900-01-01 00:00:00"
+    Resume PROC_EXIT
+End Function
+
+' Count non-empty, non-comment lines in a file.
+Private Function CountFileLines(ByVal filePath As String) As Long
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.CountFileLines"
+
+    Dim fso As Object
+    Dim ts As Object
+    Dim line As String
+    Dim cnt As Long
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(filePath) Then
+        CountFileLines = 0
+        GoTo PROC_EXIT
+    End If
+
+    cnt = 0
+    Set ts = fso.OpenTextFile(filePath, 1) ' ForReading
+    Do While Not ts.AtEndOfStream
+        line = Trim(ts.ReadLine)
+        If Len(line) > 0 And Left(line, 1) <> "#" Then cnt = cnt + 1
+    Loop
+    ts.Close
+    Set ts = Nothing
+    Set fso = Nothing
+
+    CountFileLines = cnt
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "Utilities", "CountFileLines", Err.Number, Err.Description
+    If Not ts Is Nothing Then
+        On Error Resume Next
+        ts.Close
+        On Error GoTo 0
+    End If
+    Set ts = Nothing
+    Set fso = Nothing
+    CountFileLines = 0
+    Resume PROC_EXIT
+End Function
+
+' Sync a single learned rules file between local and cloud.
+' Returns a human-readable summary string describing what happened.
+Private Function SyncOneFile(ByVal localPath As String, ByVal cloudFolder As String, ByVal fileName As String) As String
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.SyncOneFile"
+
+    Dim fso As Object
+    Dim ts As Object
+    Dim cloudPath As String
+    Dim line As String
+    Dim parts() As String
+    Dim ruleKey As String
+    Dim dictLocal As Object
+    Dim dictCloud As Object
+    Dim dictMerged As Object
+    Dim orderList As Object
+    Dim orderIndex As Long
+    Dim localCount As Long
+    Dim cloudCount As Long
+    Dim mergedCount As Long
+    Dim newFromCloud As Long
+    Dim updatedFromCloud As Long
+    Dim newFromLocal As Long
+    Dim k As Variant
+    Dim keys As Variant
+    Dim sortedLines() As String
+    Dim idx As Long
+    Dim j As Long
+    Dim isSendersFile As Boolean
+    Dim isRepliesFile As Boolean
+    Dim tsLocal As String
+    Dim tsCloud As String
+    Dim errNum As Long
+    Dim errDesc As String
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    cloudPath = cloudFolder & "\" & fileName
+    isSendersFile = (LCase(fileName) = LCase(LEARNED_SENDERS_FILE))
+    isRepliesFile = (LCase(fileName) = LCase(LEARNED_REPLIES_FILE))
+
+    ' Create cloud folder if it doesn't exist
+    If Not fso.FolderExists(cloudFolder) Then
+        fso.CreateFolder cloudFolder
+        LogMessage "INFO", "SyncOneFile: created cloud folder: " & cloudFolder
+    End If
+
+    Dim localExists As Boolean
+    Dim cloudExists As Boolean
+    localExists = fso.FileExists(localPath)
+    cloudExists = fso.FileExists(cloudPath)
+
+    ' Case 1: neither file exists
+    If Not localExists And Not cloudExists Then
+        SyncOneFile = fileName & ": no files to sync"
+        GoTo PROC_EXIT
+    End If
+
+    ' Case 2: local only - upload to cloud
+    If localExists And Not cloudExists Then
+        fso.CopyFile localPath, cloudPath, True
+        localCount = CountFileLines(localPath)
+        SyncOneFile = fileName & ": uploaded " & localCount & " rules to cloud"
+        LogMessage "INFO", "SyncOneFile: uploaded " & localPath & " -> " & cloudPath & " (" & localCount & " rules)"
+        GoTo PROC_EXIT
+    End If
+
+    ' Case 3: cloud only - download to local
+    If Not localExists And cloudExists Then
+        fso.CopyFile cloudPath, localPath, True
+        cloudCount = CountFileLines(cloudPath)
+        SyncOneFile = fileName & ": downloaded " & cloudCount & " rules from cloud"
+        LogMessage "INFO", "SyncOneFile: downloaded " & cloudPath & " -> " & localPath & " (" & cloudCount & " rules)"
+        GoTo PROC_EXIT
+    End If
+
+    ' Case 4: both exist - merge with timestamp-based conflict resolution
+    ' Read local file into dictLocal (last entry per key wins)
+    Set dictLocal = CreateObject("Scripting.Dictionary")
+    dictLocal.CompareMode = 1  ' case-insensitive
+    Set ts = fso.OpenTextFile(localPath, 1) ' ForReading
+    Do While Not ts.AtEndOfStream
+        line = Trim(ts.ReadLine)
+        If Len(line) > 0 And Left(line, 1) <> "#" Then
+            parts = Split(line, "|")
+            If UBound(parts) >= 1 Then
+                If isSendersFile Then
+                    ruleKey = LCase(Trim(parts(0)))
+                ElseIf isRepliesFile Then
+                    ' Composite key: subject|from (first two fields)
+                    If UBound(parts) >= 1 Then
+                        ruleKey = Trim(parts(0)) & "|" & Trim(parts(1))
+                    Else
+                        ruleKey = Trim(parts(0))
+                    End If
+                Else
+                    ruleKey = Trim(parts(0))
+                End If
+                dictLocal(ruleKey) = line
+            End If
+        End If
+    Loop
+    ts.Close
+    Set ts = Nothing
+    localCount = dictLocal.Count
+
+    ' Read cloud file into dictCloud
+    Set dictCloud = CreateObject("Scripting.Dictionary")
+    dictCloud.CompareMode = 1
+    Set ts = fso.OpenTextFile(cloudPath, 1)
+    Do While Not ts.AtEndOfStream
+        line = Trim(ts.ReadLine)
+        If Len(line) > 0 And Left(line, 1) <> "#" Then
+            parts = Split(line, "|")
+            If UBound(parts) >= 1 Then
+                If isSendersFile Then
+                    ruleKey = LCase(Trim(parts(0)))
+                ElseIf isRepliesFile Then
+                    ' Composite key: subject|from (first two fields)
+                    If UBound(parts) >= 1 Then
+                        ruleKey = Trim(parts(0)) & "|" & Trim(parts(1))
+                    Else
+                        ruleKey = Trim(parts(0))
+                    End If
+                Else
+                    ruleKey = Trim(parts(0))
+                End If
+                dictCloud(ruleKey) = line
+            End If
+        End If
+    Loop
+    ts.Close
+    Set ts = Nothing
+    cloudCount = dictCloud.Count
+
+    ' Build merged dictionary: start with local, merge cloud entries
+    Set dictMerged = CreateObject("Scripting.Dictionary")
+    dictMerged.CompareMode = 1
+    Set orderList = CreateObject("Scripting.Dictionary")
+    orderList.CompareMode = 1
+    orderIndex = 0
+    newFromCloud = 0
+    updatedFromCloud = 0
+    newFromLocal = 0
+
+    ' Add all local entries first
+    keys = dictLocal.keys
+    For Each k In keys
+        dictMerged(k) = dictLocal(k)
+        orderList(k) = orderIndex
+        orderIndex = orderIndex + 1
+    Next k
+
+    ' Merge cloud entries (timestamp wins for conflicts)
+    keys = dictCloud.keys
+    For Each k In keys
+        If Not dictMerged.Exists(k) Then
+            ' New rule from cloud
+            dictMerged(k) = dictCloud(k)
+            orderList(k) = orderIndex
+            orderIndex = orderIndex + 1
+            newFromCloud = newFromCloud + 1
+        Else
+            ' Key exists in both - compare timestamps, keep later one
+            tsLocal = ParseTimestamp(dictMerged(k))
+            tsCloud = ParseTimestamp(dictCloud(k))
+            ' String comparison works because timestamps are always YYYY-MM-DD HH:MM:SS (ISO sortable)
+            If tsCloud > tsLocal Then
+                dictMerged(k) = dictCloud(k)
+                updatedFromCloud = updatedFromCloud + 1
+            End If
+        End If
+    Next k
+
+    ' Count rules that were only in local (new to cloud)
+    keys = dictLocal.keys
+    For Each k In keys
+        If Not dictCloud.Exists(k) Then
+            newFromLocal = newFromLocal + 1
+        End If
+    Next k
+
+    mergedCount = dictMerged.Count
+
+    ' Build sorted output array (preserving insertion order)
+    ReDim sortedLines(0 To mergedCount - 1)
+    keys = dictMerged.keys
+    For Each k In keys
+        idx = orderList(k)
+        sortedLines(idx) = dictMerged(k)
+    Next k
+
+    ' Write merged result to local file
+    Set ts = fso.OpenTextFile(localPath, 2, True) ' ForWriting
+    For j = 0 To mergedCount - 1
+        ts.WriteLine sortedLines(j)
+    Next j
+    ts.Close
+    Set ts = Nothing
+
+    ' Write merged result to cloud file
+    Set ts = fso.OpenTextFile(cloudPath, 2, True)
+    For j = 0 To mergedCount - 1
+        ts.WriteLine sortedLines(j)
+    Next j
+    ts.Close
+    Set ts = Nothing
+
+    Set dictLocal = Nothing
+    Set dictCloud = Nothing
+    Set dictMerged = Nothing
+    Set orderList = Nothing
+    Set fso = Nothing
+
+    SyncOneFile = fileName & ": merged " & localCount & " local + " & cloudCount & " cloud -> " & mergedCount & " unique" & _
+                  " (" & newFromCloud & " new from cloud, " & updatedFromCloud & " updated, " & newFromLocal & " new to cloud)"
+
+    LogMessage "INFO", "SyncOneFile: " & SyncOneFile
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    errNum = Err.Number
+    errDesc = Err.Description
+    LogError "Utilities", "SyncOneFile", errNum, errDesc
+    If Not ts Is Nothing Then
+        On Error Resume Next
+        ts.Close
+        On Error GoTo 0
+    End If
+    Set ts = Nothing
+    Set fso = Nothing
+    Set dictLocal = Nothing
+    Set dictCloud = Nothing
+    Set dictMerged = Nothing
+    Set orderList = Nothing
+    SyncOneFile = fileName & ": ERROR - " & errDesc
+    Resume PROC_EXIT
+End Function
+
+' Sync learned senders and subjects with a cloud folder.
+' Reads RuntimeEnableCloudSync and RuntimeCloudSyncPath from settings.
+' Merges rules bidirectionally using timestamp-based conflict resolution.
+Public Sub SyncLearnedRules()
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.SyncLearnedRules"
+
+    ' Validate settings
+    If Not RuntimeEnableCloudSync Then
+        MsgBox "Cloud sync is disabled." & vbCrLf & vbCrLf & _
+               "Enable it in settings.ini:" & vbCrLf & _
+               "[Sync]" & vbCrLf & _
+               "EnableCloudSync=True", _
+               vbInformation, "Cloud Sync"
+        GoTo PROC_EXIT
+    End If
+
+    If Len(Trim(RuntimeCloudSyncPath)) = 0 Then
+        MsgBox "Cloud sync path is not configured." & vbCrLf & vbCrLf & _
+               "Set CloudSyncPath in settings.ini under [Sync].", _
+               vbExclamation, "Cloud Sync"
+        GoTo PROC_EXIT
+    End If
+
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(RuntimeCloudSyncPath) Then
+        MsgBox "Cloud sync path does not exist:" & vbCrLf & _
+               RuntimeCloudSyncPath & vbCrLf & vbCrLf & _
+               "Please verify the path in settings.ini.", _
+               vbExclamation, "Cloud Sync"
+        Set fso = Nothing
+        GoTo PROC_EXIT
+    End If
+    Set fso = Nothing
+
+    Dim cloudFolder As String
+    cloudFolder = RuntimeCloudSyncPath & "\" & LEARNED_DATA_FOLDER
+
+    Dim localSendersPath As String
+    Dim localSubjectsPath As String
+    Dim localRepliesPath As String
+    localSendersPath = GetLearnedSendersFilePath()
+    localSubjectsPath = GetLearnedSubjectsFilePath()
+    localRepliesPath = GetLearnedRepliesFilePath()
+
+    Dim resultSenders As String
+    Dim resultSubjects As String
+    Dim resultReplies As String
+
+    resultSenders = SyncOneFile(localSendersPath, cloudFolder, LEARNED_SENDERS_FILE)
+    resultSubjects = SyncOneFile(localSubjectsPath, cloudFolder, LEARNED_SUBJECTS_FILE)
+    resultReplies = SyncOneFile(localRepliesPath, cloudFolder, LEARNED_REPLIES_FILE)
+
+    ' Refresh in-memory caches after sync
+    LoadLearnedSenders True
+    LoadLearnedSubjects True
+
+    MsgBox "Cloud sync complete:" & vbCrLf & vbCrLf & _
+           resultSenders & vbCrLf & _
+           resultSubjects & vbCrLf & _
+           resultReplies & vbCrLf & vbCrLf & _
+           "Cloud folder: " & cloudFolder, _
+           vbInformation, "Cloud Sync"
+
+    LogMessage "INFO", "SyncLearnedRules complete. Senders: " & resultSenders & " | Subjects: " & resultSubjects & " | Replies: " & resultReplies
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "Utilities", "SyncLearnedRules", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Silent auto-sync: called at Outlook startup and quit.
+' No MsgBox prompts. Gracefully skips if cloud sync is disabled or OneDrive is unavailable.
+' Returns True if sync was performed, False if skipped.
+Public Function SyncLearnedRulesAuto() As Boolean
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.SyncLearnedRulesAuto"
+
+    SyncLearnedRulesAuto = False
+
+    ' Skip if sync is disabled
+    If Not RuntimeEnableCloudSync Then
+        LogMessage "INFO", "SyncLearnedRulesAuto: cloud sync disabled, skipping"
+        GoTo PROC_EXIT
+    End If
+
+    ' Skip if path is not configured
+    If Len(Trim(RuntimeCloudSyncPath)) = 0 Then
+        LogMessage "INFO", "SyncLearnedRulesAuto: cloud sync path not configured, skipping"
+        GoTo PROC_EXIT
+    End If
+
+    ' Skip gracefully if OneDrive folder is unavailable (offline, paused, unmounted)
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(RuntimeCloudSyncPath) Then
+        LogMessage "WARN", "SyncLearnedRulesAuto: cloud path not available (" & RuntimeCloudSyncPath & "), using local rules only"
+        Set fso = Nothing
+        GoTo PROC_EXIT
+    End If
+    Set fso = Nothing
+
+    Dim cloudFolder As String
+    cloudFolder = RuntimeCloudSyncPath & "\" & LEARNED_DATA_FOLDER
+
+    Dim localSendersPath As String
+    Dim localSubjectsPath As String
+    Dim localRepliesPath As String
+    localSendersPath = GetLearnedSendersFilePath()
+    localSubjectsPath = GetLearnedSubjectsFilePath()
+    localRepliesPath = GetLearnedRepliesFilePath()
+
+    Dim resultSenders As String
+    Dim resultSubjects As String
+    Dim resultReplies As String
+
+    resultSenders = SyncOneFile(localSendersPath, cloudFolder, LEARNED_SENDERS_FILE)
+    resultSubjects = SyncOneFile(localSubjectsPath, cloudFolder, LEARNED_SUBJECTS_FILE)
+    resultReplies = SyncOneFile(localRepliesPath, cloudFolder, LEARNED_REPLIES_FILE)
+
+    ' Refresh in-memory caches after sync
+    LoadLearnedSenders True
+    LoadLearnedSubjects True
+
+    LogMessage "INFO", "SyncLearnedRulesAuto complete. " & resultSenders & " | " & resultSubjects & " | " & resultReplies
+    SyncLearnedRulesAuto = True
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "Utilities", "SyncLearnedRulesAuto", Err.Number, Err.Description
+    LogMessage "WARN", "SyncLearnedRulesAuto failed, continuing with local rules"
+    SyncLearnedRulesAuto = False
+    Resume PROC_EXIT
+End Function
+
+'-------------------------------------------------------------------------------
 ' LEARNED RULES - PUBLIC CACHE ACCESSORS (for export and dashboard)
 '-------------------------------------------------------------------------------
 
@@ -2775,6 +3241,10 @@ Private Function DispatchMacroStd(ByVal macroName As String, Optional ByVal rawJ
         Case "DisableRealTimeFilter"
             result = "Cannot run from Web UI. In VBA Immediate Window (Ctrl+G), type:" & vbCrLf & _
                      "  ThisOutlookSession.DisableRealTimeFilter"
+
+        Case "SyncLearnedRules"
+            SyncLearnedRules
+            result = "Cloud sync complete. Senders: " & GetLearnedSendersCount() & ", Subjects: " & GetLearnedSubjectsCount()
 
         Case Else
             result = "ERROR: Unknown macro: " & macroName

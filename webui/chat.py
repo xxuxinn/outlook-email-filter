@@ -75,6 +75,10 @@ COMMAND_MAP = [
     (("draft replies", "draft reply", "draft for selected"),
      {"type": "macro", "macro": "DraftReplyForSelected", "label": "Drafting replies for selected email(s)..."}),
 
+    # --- Cloud sync ---
+    (("sync rules", "cloud sync", "sync learned", "sync senders", "sync subjects"),
+     {"type": "macro", "macro": "SyncLearnedRules", "label": "Syncing learned rules with cloud..."}),
+
     # --- Restore ---
     (("restore review", "restore from review"),
      {"type": "macro", "macro": "RestoreFromReview", "label": "Restoring from Review..."}),
@@ -97,6 +101,7 @@ HELP_TEXT = """Available commands:
 • **enable/disable llm** — toggle LLM on/off
 • **scan sent** — scan Sent Items for reply patterns
 • **draft replies** — draft few-shot replies for selected email(s)
+• **sync rules** — sync learned rules with cloud (OneDrive)
 • **restore review** — move Review folder emails back to Inbox"""
 
 

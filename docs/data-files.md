@@ -78,6 +78,11 @@ ReplyPersona=              ; blank = auto-generated from name patterns
 ScanSentItems=False
 ScanSentDays=30
 AutoReplyForSenders=       ; blank = draft for all KEEP emails; comma-separated senders to restrict
+
+[Sync]
+EnableCloudSync=False
+; Path to shared cloud folder (OneDrive, Google Drive, etc.)
+CloudSyncPath=C:\Users\xxuxinn\OneDrive - The Hong Kong Polytechnic University
 ```
 
 ---

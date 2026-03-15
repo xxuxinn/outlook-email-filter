@@ -57,6 +57,14 @@ Full list of callable macros. Assign frequently used ones to the Quick Access To
 | `ImportExistingLearnedSubjectFolder` | Bulk import subjects from LearnSubjectDelete folder |
 | `ShowLearnedRepliesSummary` | Show learned reply pair count |
 
+## Cloud Sync
+
+| Macro | Purpose |
+|-------|---------|
+| `SyncLearnedRules` | Bidirectional sync of learned senders, subjects, and replies with cloud folder (OneDrive) |
+
+> Configure in `settings.ini` under `[Sync]`: set `EnableCloudSync=True` and `CloudSyncPath` to your OneDrive path. Merges rules using timestamp-based conflict resolution — the later decision wins.
+
 ## Server Rules
 
 | Macro | Purpose |
