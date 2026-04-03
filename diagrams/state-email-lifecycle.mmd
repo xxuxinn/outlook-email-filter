@@ -1,0 +1,59 @@
+stateDiagram-v2
+    [*] --> Inbox: Email arrives
+
+    state "Classification" as classify {
+        [*] --> RuleChain: ClassifyEmail()
+        RuleChain --> LearnedRule: Rule 0/0.5 match
+        RuleChain --> RuleBased: Rules 1-9 match
+        RuleChain --> Ambiguous: No rule matched
+    }
+
+    Inbox --> classify: Real-time filter<br/>or batch filter
+
+    state "Actions" as actions {
+        state "KEEP" as keep
+        state "DELETE" as delete
+        state "MOVE Protected" as protect
+        state "LLM Review" as llmreview
+        state "Move to Review" as review
+    }
+
+    classify --> keep: KEEP decision
+    classify --> delete: DELETE decision
+    classify --> protect: MOVE_II (protected domain)
+    classify --> llmreview: LLM_REVIEW (LLM enabled)
+    classify --> review: LLM_REVIEW (LLM disabled)
+
+    llmreview --> keep: LLM says KEEP
+    llmreview --> delete: LLM says DELETE
+    llmreview --> review: LLM unclear/error
+
+    state "Learning" as learn {
+        state "LearnKeep folder" as lk
+        state "LearnDelete folder" as ld
+        state "LearnSubjectDelete folder" as ls
+        state "LearnReply folder" as lr
+    }
+
+    keep --> lk: User drags to LearnKeep
+    keep --> ld: User drags to LearnDelete
+    delete --> lk: User drags to LearnKeep<br/>(rule reversal + rescue)
+    review --> lk: User drags to LearnKeep
+    review --> ld: User drags to LearnDelete
+    Inbox --> ls: User drags to LearnSubjectDelete
+    Inbox --> lr: User drags sent reply
+
+    lk --> [*]: Rule saved to learned_senders.txt
+    ld --> [*]: Rule saved to learned_senders.txt
+    ls --> [*]: Rule saved to learned_subjects.txt
+    lr --> [*]: Pair saved to learned_replies.txt
+
+    state "Agent Features" as agent {
+        state "Auto-Reply Draft" as autoreply
+        state "Scan Sent Items" as scansent
+    }
+
+    keep --> autoreply: AutoReplyOnArrival=True
+    autoreply --> [*]: Draft saved to Drafts folder
+    Inbox --> scansent: ScanSentForReplyPatterns macro
+    scansent --> [*]: Pairs saved to learned_replies.txt

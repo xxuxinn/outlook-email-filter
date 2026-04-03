@@ -1,0 +1,255 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 884.9099583333334 2500.9170000000004" width="884.9099583333334" height="2500.9170000000004" style="--bg:#FFFFFF;--fg:#27272A;background:var(--bg)">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="Start" data-to="Extract" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="418.07695833333344,76.9 418.07695833333344,124.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Extract" data-to="R0" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="418.07695833333344,161.8 418.07695833333344,209.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R0" data-to="KEEP" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="KEEP rule" points="375.09870833333343,338.73475 375.09870833333343,546.913 69.50000000000006,546.913 69.50000000000006,2364.017 207.7910833333334,2364.017 207.7910833333334,2400.017" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R0" data-to="DELETE" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="DELETE rule" points="461.05520833333344,338.73475 461.05520833333344,417.713 785.3059583333334,417.713 785.3059583333334,2388.017 739.8043869047619,2388.017 739.8043869047619,2400.017" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R0" data-to="R05" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No rule" points="418.07695833333344,381.713 418.07695833333344,417.713 438.80612500000007,417.713 438.80612500000007,498.01300000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R05" data-to="DELETE" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Yes" points="449.74979166666674,534.913 449.74979166666674,676.1129999999999 737.3059583333334,676.1129999999999 737.3059583333334,2388.017 726.1898154761905,2388.017 726.1898154761905,2400.017" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R05" data-to="R1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No" points="427.8624583333334,534.913 427.8624583333334,546.913 377.55612500000007,546.913 377.55612500000007,627.213" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R1" data-to="MOVE" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Yes" points="367.55612500000007,664.1129999999999 367.55612500000007,909.6129999999998 310.466375,909.6129999999998 310.4663750000001,989.9129999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R1" data-to="R2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No" points="387.55612500000007,664.1129999999999 387.55612500000007,676.1129999999999 444.64587500000005,676.1129999999999 444.64587500000005,756.4129999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R2" data-to="KEEP" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Name in subject
+or greeting in body" points="434.64587500000005,793.3129999999999 434.64587500000005,1038.8129999999996 204.92950000000008,1038.8129999999996 204.92950000000008,2352.017 217.4808333333334,2352.017 217.4808333333334,2400.017" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R2" data-to="R3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No" points="454.64587500000005,793.3129999999999 454.64587500000005,829.3129999999999 478.8798750000001,829.3129999999999 478.8798750000001,909.6129999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R3" data-to="KEEP" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Yes" points="468.8798750000001,946.5129999999998 468.8798750000001,1050.8129999999996 263.3975000000001,1050.8129999999996 263.3975000000001,2316.017 227.1705833333334,2316.017 227.1705833333334,2400.017" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R3" data-to="R4" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No" points="488.8798750000001,946.5129999999998 488.8798750000001,982.5129999999998 499.3798750000001,982.5129999999998 499.3798750000001,1062.8129999999996" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R4" data-to="KEEP" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Yes" points="489.3798750000001,1099.7129999999997 489.3798750000001,1204.0129999999997 291.6475000000001,1204.0129999999997 291.6475000000001,2328.017 236.86033333333341,2328.017 236.86033333333341,2400.017" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R4" data-to="R5" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No" points="509.3798750000001,1099.7129999999997 509.3798750000001,1135.7129999999997 519.8798750000001,1135.7129999999997 519.8798750000001,1216.0129999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R5" data-to="KEEP" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Yes" points="509.8798750000001,1252.9129999999998 509.8798750000001,1357.2129999999997 319.8975000000001,1357.2129999999997 319.8975000000001,2340.017 246.55008333333342,2340.017 246.55008333333342,2400.017" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R5" data-to="R6" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No" points="529.8798750000001,1252.9129999999998 529.8798750000001,1288.9129999999998 540.3798750000001,1288.9129999999998 540.3798750000001,1369.2129999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R6" data-to="KEEP" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Yes" points="530.3798750000001,1406.1129999999998 530.3798750000001,1748.513 348.1475000000001,1748.513 348.1475000000001,2352.017 256.2398333333334,2352.017 256.2398333333334,2400.017" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R6" data-to="R7" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No" points="550.3798750000001,1406.1129999999998 550.3798750000001,1442.1129999999998 590.0622083333334,1442.1129999999998 590.0622083333334,1522.4129999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R7" data-to="DELETE" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Yes" points="600.0622083333334,1559.3129999999999 600.0622083333334,1663.6129999999998 698.9769583333334,1663.6129999999998 698.9769583333334,2388.017 712.5752440476191,2388.017 712.5752440476191,2400.017" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R7" data-to="R8" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No" points="580.0622083333334,1559.3129999999999 580.0622083333334,1595.3129999999999 568.9917083333335,1595.3129999999999 568.9917083333335,1675.6129999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R8" data-to="DELETE" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Yes" points="578.9917083333335,1712.513 578.9917083333335,1994.913 671.2269583333334,1994.913 671.2269583333334,2364.017 698.9606726190477,2364.017 698.9606726190477,2400.017" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R8" data-to="R9" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No" points="558.9917083333335,1712.513 558.9917083333335,1748.513 538.9917083333335,1748.513 538.9917083333335,1828.8129999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R9" data-to="DELETE" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Yes" points="548.9917083333335,1865.713 548.9917083333335,2006.913 643.4769583333334,2006.913 643.4769583333334,2376.017 685.3461011904762,2376.017 685.3461011904762,2400.017" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R9" data-to="R10" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No" points="528.9917083333335,1865.713 528.9917083333335,1877.713 469.08375000000007,1877.713 469.08375000000007,1958.013" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R10" data-to="LLM" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Yes" points="479.2864166666667,1994.913 479.2864166666667,2006.913 530.8580000000001,2006.913 530.8580000000001,2087.2129999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R10" data-to="REVIEW" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No" points="458.8810833333334,1994.913 458.8810833333334,2075.2129999999997 407.30950000000007,2075.2129999999997 407.30950000000007,2412.017 443.8375416666667,2412.017 443.8375416666667,2400.017" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="LLM" data-to="LLMResult" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="530.8580000000001,2124.1130000000003 530.8580000000001,2172.1130000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="LLMResult" data-to="DELETE" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="DELETE" points="564.7590000000001,2273.8160000000003 564.7590000000001,2343.7169999999996 607.5589583333334,2343.7169999999996 607.5589583333334,2388.017 671.7315297619048,2388.017 671.7315297619048,2400.017" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="LLMResult" data-to="KEEP" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="KEEP" points="496.9570000000001,2273.8160000000003 496.9570000000001,2319.7169999999996 378.6475000000001,2319.7169999999996 378.6475000000001,2364.017 265.9295833333334,2364.017 265.9295833333334,2400.017" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="LLMResult" data-to="REVIEW" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Unclear / Error" points="530.8580000000001,2307.717 530.8580000000001,2343.7169999999996 528.5349583333334,2343.7169999999996 528.5349583333334,2412.017 489.68387500000006,2412.017 489.68387500000006,2400.017" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="R0" data-to="KEEP" data-label="KEEP rule">
+  <rect x="36.00000000000006" y="2326.7169999999996" width="66.952" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="69.47600000000006" y="2341.8669999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">KEEP rule</text>
+</g>
+<g class="edge-label" data-from="R0" data-to="DELETE" data-label="DELETE rule">
+  <rect x="744.3059583333334" y="2189.2169999999987" width="81.20800000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="784.9099583333334" y="2204.366999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">DELETE rule</text>
+</g>
+<g class="edge-label" data-from="R0" data-to="R05" data-label="No rule">
+  <rect x="412.80612500000007" y="424.713" width="51.508" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="438.5601250000001" y="439.863" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No rule</text>
+</g>
+<g class="edge-label" data-from="R05" data-to="DELETE" data-label="Yes">
+  <rect x="718.8059583333334" y="2221.516999999999" width="36.658" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="737.1349583333333" y="2236.666999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Yes</text>
+</g>
+<g class="edge-label" data-from="R05" data-to="R1" data-label="No">
+  <rect x="362.05612500000007" y="553.913" width="30.718000000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="377.41512500000005" y="569.063" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No</text>
+</g>
+<g class="edge-label" data-from="R1" data-to="MOVE" data-label="Yes">
+  <rect x="291.966375" y="916.6129999999998" width="36.658" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="310.29537500000004" y="931.7629999999998" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Yes</text>
+</g>
+<g class="edge-label" data-from="R1" data-to="R2" data-label="No">
+  <rect x="429.14587500000005" y="683.1129999999999" width="30.718000000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="444.504875" y="698.2629999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No</text>
+</g>
+<g class="edge-label" data-from="R2" data-to="KEEP" data-label="Name in subject
+or greeting in body">
+  <rect x="152.42950000000008" y="2150.9169999999995" width="104.96800000000003" height="44.6" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="204.91350000000008" y="2173.2169999999996" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="204.91350000000008" dy="-3.3000000000000007">Name in subject</tspan><tspan x="204.91350000000008" dy="14.3">or greeting in body</tspan></text>
+</g>
+<g class="edge-label" data-from="R2" data-to="R3" data-label="No">
+  <rect x="463.3798750000001" y="836.3129999999999" width="30.718000000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="478.73887500000006" y="851.4629999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No</text>
+</g>
+<g class="edge-label" data-from="R3" data-to="KEEP" data-label="Yes">
+  <rect x="244.8975000000001" y="2197.516999999999" width="36.658" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="263.2265000000001" y="2212.666999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Yes</text>
+</g>
+<g class="edge-label" data-from="R3" data-to="R4" data-label="No">
+  <rect x="483.8798750000001" y="989.5129999999998" width="30.718000000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="499.23887500000006" y="1004.6629999999998" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No</text>
+</g>
+<g class="edge-label" data-from="R4" data-to="KEEP" data-label="Yes">
+  <rect x="273.1475000000001" y="2229.816999999999" width="36.658" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="291.4765000000001" y="2244.966999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Yes</text>
+</g>
+<g class="edge-label" data-from="R4" data-to="R5" data-label="No">
+  <rect x="504.37987500000014" y="1142.7129999999997" width="30.718000000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="519.7388750000001" y="1157.8629999999998" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No</text>
+</g>
+<g class="edge-label" data-from="R5" data-to="KEEP" data-label="Yes">
+  <rect x="301.3975000000001" y="2262.1169999999993" width="36.658" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="319.7265000000001" y="2277.2669999999994" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Yes</text>
+</g>
+<g class="edge-label" data-from="R5" data-to="R6" data-label="No">
+  <rect x="524.8798750000001" y="1295.9129999999998" width="30.718000000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="540.2388750000001" y="1311.0629999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No</text>
+</g>
+<g class="edge-label" data-from="R6" data-to="KEEP" data-label="Yes">
+  <rect x="329.6475000000001" y="2294.4169999999995" width="36.658" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="347.9765000000001" y="2309.5669999999996" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Yes</text>
+</g>
+<g class="edge-label" data-from="R6" data-to="R7" data-label="No">
+  <rect x="574.5622083333334" y="1449.1129999999998" width="30.718000000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="589.9212083333334" y="1464.263" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No</text>
+</g>
+<g class="edge-label" data-from="R7" data-to="DELETE" data-label="Yes">
+  <rect x="680.4769583333334" y="2253.816999999999" width="36.658" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="698.8059583333334" y="2268.966999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Yes</text>
+</g>
+<g class="edge-label" data-from="R7" data-to="R8" data-label="No">
+  <rect x="553.4917083333335" y="1602.3129999999999" width="30.718000000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="568.8507083333335" y="1617.463" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No</text>
+</g>
+<g class="edge-label" data-from="R8" data-to="DELETE" data-label="Yes">
+  <rect x="652.7269583333334" y="2286.1169999999993" width="36.658" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="671.0559583333334" y="2301.2669999999994" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Yes</text>
+</g>
+<g class="edge-label" data-from="R8" data-to="R9" data-label="No">
+  <rect x="523.4917083333335" y="1755.513" width="30.718000000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="538.8507083333335" y="1770.663" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No</text>
+</g>
+<g class="edge-label" data-from="R9" data-to="DELETE" data-label="Yes">
+  <rect x="624.9769583333334" y="2318.4169999999995" width="36.658" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="643.3059583333334" y="2333.5669999999996" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Yes</text>
+</g>
+<g class="edge-label" data-from="R9" data-to="R10" data-label="No">
+  <rect x="453.58375000000007" y="1884.713" width="30.718000000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="468.94275000000005" y="1899.863" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No</text>
+</g>
+<g class="edge-label" data-from="R10" data-to="LLM" data-label="Yes">
+  <rect x="512.3580000000001" y="2013.913" width="36.658" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="530.687" y="2029.063" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Yes</text>
+</g>
+<g class="edge-label" data-from="R10" data-to="REVIEW" data-label="No">
+  <rect x="391.80950000000007" y="2282.4169999999995" width="30.718000000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="407.16850000000005" y="2297.5669999999996" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No</text>
+</g>
+<g class="edge-label" data-from="LLMResult" data-to="DELETE" data-label="DELETE">
+  <rect x="577.0589583333333" y="2350.7169999999996" width="60.418000000000006" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="607.2679583333334" y="2365.8669999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">DELETE</text>
+</g>
+<g class="edge-label" data-from="LLMResult" data-to="KEEP" data-label="KEEP">
+  <rect x="355.1475000000001" y="2326.7169999999996" width="46.162" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="378.2285000000001" y="2341.8669999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">KEEP</text>
+</g>
+<g class="edge-label" data-from="LLMResult" data-to="REVIEW" data-label="Unclear / Error">
+  <rect x="483.53495833333346" y="2350.7169999999996" width="89.52400000000003" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="528.2969583333335" y="2365.8669999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Unclear / Error</text>
+</g>
+<g class="node" data-id="Start" data-label="New Email Arrives" data-shape="stadium">
+  <rect x="343.74995833333344" y="40" width="148.654" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="418.07695833333344" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">New Email Arrives</text>
+</g>
+<g class="node" data-id="Extract" data-label="Extract sender, subject, body, domain" data-shape="rectangle">
+  <rect x="288.1749583333334" y="124.9" width="259.804" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="418.0769583333334" y="143.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Extract sender, subject, body, domain</text>
+</g>
+<g class="node" data-id="R0" data-label="Rule 0:
+Learned Sender?" data-shape="diamond">
+  <polygon points="418.07695833333344,209.8 504.03345833333344,295.7565 418.07695833333344,381.713 332.12045833333343,295.7565" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="418.07695833333344" y="295.7565" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="418.07695833333344" dy="-3.9000000000000012">Rule 0:</tspan><tspan x="418.07695833333344" dy="16.900000000000002">Learned Sender?</tspan></text>
+</g>
+<g class="node" data-id="KEEP" data-label="KEEP" data-shape="stadium">
+  <rect x="198.1013333333334" y="2400.017" width="77.518" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="236.86033333333341" y="2418.4669999999996" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">KEEP</text>
+</g>
+<g class="node" data-id="DELETE" data-label="DELETE" data-shape="stadium">
+  <rect x="658.1169583333334" y="2400.017" width="95.30199999999999" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="705.7679583333334" y="2418.4669999999996" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">DELETE</text>
+</g>
+<g class="node" data-id="R05" data-label="R05" data-shape="rectangle">
+  <rect x="405.97512500000005" y="498.01300000000003" width="65.662" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="438.80612500000007" y="516.4630000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">R05</text>
+</g>
+<g class="node" data-id="R1" data-label="R1" data-shape="rectangle">
+  <rect x="347.55612500000007" y="627.213" width="60" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="377.55612500000007" y="645.663" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">R1</text>
+</g>
+<g class="node" data-id="MOVE" data-label="MOVE to Protected" data-shape="stadium">
+  <rect x="234.28687500000007" y="989.9129999999998" width="152.359" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="310.4663750000001" y="1008.3629999999998" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">MOVE to Protected</text>
+</g>
+<g class="node" data-id="R2" data-label="R2" data-shape="rectangle">
+  <rect x="414.64587500000005" y="756.4129999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="444.64587500000005" y="774.8629999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">R2</text>
+</g>
+<g class="node" data-id="R3" data-label="R3" data-shape="rectangle">
+  <rect x="448.8798750000001" y="909.6129999999998" width="60" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="478.8798750000001" y="928.0629999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">R3</text>
+</g>
+<g class="node" data-id="R4" data-label="R4" data-shape="rectangle">
+  <rect x="469.3798750000001" y="1062.8129999999996" width="60" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="499.3798750000001" y="1081.2629999999997" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">R4</text>
+</g>
+<g class="node" data-id="R5" data-label="R5" data-shape="rectangle">
+  <rect x="489.8798750000001" y="1216.0129999999997" width="60" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="519.8798750000001" y="1234.4629999999997" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">R5</text>
+</g>
+<g class="node" data-id="R6" data-label="R6" data-shape="rectangle">
+  <rect x="510.3798750000001" y="1369.2129999999997" width="60" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="540.3798750000001" y="1387.6629999999998" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">R6</text>
+</g>
+<g class="node" data-id="R7" data-label="R7" data-shape="rectangle">
+  <rect x="560.0622083333334" y="1522.4129999999998" width="60" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="590.0622083333334" y="1540.8629999999998" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">R7</text>
+</g>
+<g class="node" data-id="R8" data-label="R8" data-shape="rectangle">
+  <rect x="538.9917083333335" y="1675.6129999999998" width="60" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="568.9917083333335" y="1694.0629999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">R8</text>
+</g>
+<g class="node" data-id="R9" data-label="R9" data-shape="rectangle">
+  <rect x="508.9917083333334" y="1828.8129999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="538.9917083333335" y="1847.263" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">R9</text>
+</g>
+<g class="node" data-id="R10" data-label="R10" data-shape="rectangle">
+  <rect x="438.47575000000006" y="1958.013" width="61.216" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="469.08375000000007" y="1976.463" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">R10</text>
+</g>
+<g class="node" data-id="LLM" data-label="Call LLM via CallLLM" data-shape="rectangle">
+  <rect x="446.5275000000001" y="2087.2129999999997" width="168.661" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="530.8580000000001" y="2105.6629999999996" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Call LLM via CallLLM</text>
+</g>
+<g class="node" data-id="REVIEW" data-label="MOVE to Review" data-shape="stadium">
+  <rect x="397.99120833333336" y="2400.017" width="137.539" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="466.76070833333335" y="2418.4669999999996" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">MOVE to Review</text>
+</g>
+<g class="node" data-id="LLMResult" data-label="LLM Says?" data-shape="diamond">
+  <polygon points="530.8580000000001,2172.1130000000003 598.6600000000001,2239.9150000000004 530.8580000000001,2307.7170000000006 463.05600000000004,2239.9150000000004" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="530.8580000000001" y="2239.9150000000004" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">LLM Says?</text>
+</g>
+</svg>

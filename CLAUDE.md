@@ -43,7 +43,7 @@ VBA side of bridge: `GetCommandsDir()` + `WriteResultFile()` in Utilities.bas,
 ## Classification Priority (first match wins)
 
 0. Learned sender rule (KEEP or DELETE) — from `learned_senders.txt`
-0.5. Learned subject DELETE rule — substring match against `learned_subjects.txt`
+0.5. Learned subject DELETE rule — substring match against `learned_subjects.txt` (patterns are auto-generalized: unique codes, IDs, and dates are stripped so one rule matches all variants)
 1–6. Rule-based KEEP: protected domain, personally addressed, org tags, VIP keywords, RE:, FW:
 7–9. Rule-based DELETE: known senders, sender patterns, subject patterns
 10. LLM_REVIEW → calls `CallLLM` if enabled, else moves to Review folder

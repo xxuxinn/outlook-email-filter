@@ -1,0 +1,35 @@
+sequenceDiagram
+    actor User
+    participant SPA as SPA (app.js)
+    participant Flask as server.py
+    participant Bridge as bridge.py
+    participant FS as commands/ dir
+    participant VBA as Utilities.bas<br/>PollForCommandsTimer
+    participant Macro as Target Macro
+
+    User->>SPA: Click action or type chat command
+    SPA->>Flask: POST /api/command {macro, args}
+    Flask->>Bridge: send_command(macro, args)
+    Bridge->>FS: Write {id}.json
+    Bridge-->>Flask: Return command ID
+    Flask-->>SPA: {command_id, status: pending}
+
+    loop Every 2 seconds (Win32 SetTimer)
+        VBA->>FS: Check for *.json files
+    end
+
+    VBA->>FS: Read {id}.json
+    VBA->>Macro: Execute macro
+    Macro-->>VBA: Return result
+    VBA->>FS: Write {id}.result (UTF-8 via ADODB.Stream)
+    VBA->>FS: Delete {id}.json
+
+    loop Poll every 0.5s (up to 120s)
+        SPA->>Flask: GET /api/command/{id}/result
+        Flask->>Bridge: get_result(id)
+        Bridge->>FS: Check for {id}.result
+    end
+
+    Bridge-->>Flask: Return result JSON
+    Flask-->>SPA: {status, output}
+    SPA-->>User: Display result

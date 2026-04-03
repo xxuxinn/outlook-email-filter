@@ -108,13 +108,19 @@ spam@example.com|DELETE|2026-02-19 15:00:00
 
 **Format**: one rule per line, pipe-delimited
 ```
+Funding Application Submitted For Your Information Only|DELETE|2026-03-14 10:00:00
 Weekly Digest|DELETE|2026-02-19 14:30:00
 ```
 
 - Only DELETE action is valid for subject rules
+- **Smart pattern extraction**: `RecordLearnedSubject` calls `ExtractSubjectPattern()` to strip variable parts (unique codes, reference IDs, dates) before storing. For example, dragging an email with subject "Funding Application Submitted For Your Information Only (A0061323)" stores just "Funding Application Submitted For Your Information Only" — matching all future emails with any code.
+- Patterns stripped: `(A0061323)`, `[TICKET-4521]`, `INV-2026-0042`, `#WX-98234`, standalone 5+ digit numbers, dates. Org tags like `[MM]`, `[HRO]` (2-4 uppercase letters) are preserved.
+- Duplicate patterns are skipped (no redundant rules from dragging multiple emails of the same type)
+- Falls back to verbatim subject if pattern extraction strips too much (< 8 chars)
 - Lookup is **substring** iteration — any cached key that is a substring of the incoming subject triggers DELETE
 - Keys sanitized via `SanitizeSubject()` (strips CR/LF/pipe/null)
-- `RecordLearnedSubject(subject, "DELETE")` writes to this file
+- `RecordLearnedSubject(subject, "DELETE")` extracts pattern and writes to this file
+- `ExtractSubjectPattern(subject)` returns generalized pattern (uses VBScript.RegExp)
 - `LookupLearnedSubject(subject)` returns "DELETE" or "" (iterates all keys)
 
 ---

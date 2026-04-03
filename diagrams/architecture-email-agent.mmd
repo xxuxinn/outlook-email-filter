@@ -1,0 +1,61 @@
+flowchart TB
+    subgraph VBA["Outlook VBA Modules"]
+        Config["Config.bas<br/>DEFAULT_* constants<br/>Runtime* variables"]
+        Utilities["Utilities.bas<br/>Helpers, CallLLM, JSON,<br/>logging, bridge poller"]
+        EmailFilter["EmailFilter.bas<br/>ClassifyEmail (10 rules)<br/>ExecuteAction, LLM tools"]
+        EmailAgent["EmailAgent.bas<br/>Auto-reply, pattern gen,<br/>sent items scanner"]
+        BatchFilter["BatchFilter.bas<br/>Batch macros,<br/>dry run, reports"]
+        Session["ThisOutlookSession<br/>Event handlers,<br/>learning folders"]
+
+        Config --> Utilities
+        Utilities --> EmailFilter
+        Utilities --> EmailAgent
+        EmailFilter --> BatchFilter
+        EmailAgent --> BatchFilter
+        BatchFilter --> Session
+    end
+
+    subgraph WebUI["Web UI (Python Flask)"]
+        SPA["SPA<br/>index.html + app.js"]
+        Server["server.py<br/>Flask routes"]
+        BridgePy["bridge.py<br/>File-based IPC"]
+        SettingsMgr["settings_manager.py<br/>INI read/write"]
+        ChatPy["chat.py<br/>Keyword parser"]
+
+        SPA --> Server
+        Server --> BridgePy
+        Server --> SettingsMgr
+        Server --> ChatPy
+    end
+
+    subgraph Storage["%APPDATA%/OutlookEmailFilter"]
+        SettingsINI["settings.ini"]
+        Senders["learned_senders.txt"]
+        Subjects["learned_subjects.txt"]
+        Replies["learned_replies.txt"]
+        Commands["commands/*.json<br/>commands/*.result"]
+        ErrorLog["error.log"]
+        LLMLog["llm_debug.log"]
+    end
+
+    subgraph LLM["LLM Providers"]
+        Local["Local<br/>Ollama / LM Studio"]
+        Azure["Azure OpenAI"]
+        Claude["Anthropic Claude"]
+        OpenAI["OpenAI-compatible<br/>OpenRouter / Groq"]
+    end
+
+    BridgePy <-->|"Write .json / Read .result"| Commands
+    Utilities <-->|"Read .json / Write .result<br/>(Win32 SetTimer 2s)"| Commands
+    SettingsMgr <--> SettingsINI
+    Utilities <--> SettingsINI
+    Utilities --> Senders
+    Utilities --> Subjects
+    Utilities --> Replies
+    Utilities --> ErrorLog
+    Utilities --> LLMLog
+
+    Utilities -->|"CallLLM routes by provider"| Local
+    Utilities --> Azure
+    Utilities --> Claude
+    Utilities --> OpenAI

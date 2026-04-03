@@ -1,0 +1,194 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2109.8100833333333 989.9000000000001" width="2109.8100833333333" height="989.9000000000001" style="--bg:#FFFFFF;--fg:#27272A;background:var(--bg)">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="VBA" data-label="Outlook VBA Modules">
+  <rect x="509.71217857142847" y="40" width="584.3366785714286" height="629.5" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="509.71217857142847" y="40" width="584.3366785714286" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="521.7121785714285" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Outlook VBA Modules</text>
+</g>
+<g class="subgraph" data-id="WebUI" data-label="Web UI (Python Flask)">
+  <rect x="1549.9270833333335" y="340.1000000000001" width="519.883" height="317.40000000000003" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="1549.9270833333335" y="340.1000000000001" width="519.883" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="1561.9270833333335" y="354.1000000000001" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Web UI (Python Flask)</text>
+</g>
+<g class="subgraph" data-id="Storage" data-label="%APPDATA%/OutlookEmailFilter">
+  <rect x="750.458" y="800.1000000000001" width="1143.507" height="149.8" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="750.458" y="800.1000000000001" width="1143.507" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="762.458" y="814.1000000000001" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">%APPDATA%/OutlookEmailFilter</text>
+</g>
+<g class="subgraph" data-id="LLM" data-label="LLM Providers">
+  <rect x="40" y="797.8" width="682.458" height="113.80000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="797.8" width="682.458" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="811.8" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">LLM Providers</text>
+</g>
+<polyline class="edge" data-from="BridgePy" data-to="Commands" data-style="solid" data-arrow-start="true" data-arrow-end="true" data-label="Write .json / Read .result" points="1629.8800833333335,639.0500000000001 1629.8800833333335,675.5000000000001 1757.9785000000002,675.5000000000001 1757.9785,856.1000000000001 1697.4546666666665,856.1000000000001 1697.4546666666665,880.1000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" marker-start="url(#arrowhead-start)" />
+<polyline class="edge" data-from="Utilities" data-to="Commands" data-style="solid" data-arrow-start="true" data-arrow-end="true" data-label="Read .json / Write .result
+(Win32 SetTimer 2s)" points="1050.9904285714283,273.4 1050.9904285714283,285.4 1051.548857142857,285.4 1051.5488571428568,699.5000000000001 1591.9642499999998,699.5000000000001 1591.9642499999998,782.1000000000001 1649.138333333333,782.1000000000001 1649.138333333333,880.1000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" marker-start="url(#arrowhead-start)" />
+<polyline class="edge" data-from="SettingsMgr" data-to="SettingsINI" data-style="solid" data-arrow-start="true" data-arrow-end="true" points="1971.3320833333337,639.05 1971.3320833333337,759.575 1825.868,759.575 1825.868,880.1000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" marker-start="url(#arrowhead-start)" />
+<polyline class="edge" data-from="Utilities" data-to="SettingsINI" data-style="solid" data-arrow-start="true" data-arrow-end="true" points="983.344357142857,273.4 983.344357142857,759.575 1825.868,759.575 1825.868,880.1000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" marker-start="url(#arrowhead-start)" />
+<polyline class="edge" data-from="Utilities" data-to="Senders" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="996.8735714285713,273.4 996.8735714285713,285.4 997.4319999999998,285.4 997.4319999999999,880.1000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Utilities" data-to="Subjects" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1010.4027857142855,273.4 1010.4027857142855,285.4 1010.9612142857142,285.4 1010.961214285714,782.1000000000001 1187.4239999999998,782.1000000000001 1187.424,880.1000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Utilities" data-to="Replies" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1037.461214285714,273.4 1037.461214285714,285.4 1038.0196428571428,285.4 1038.0196428571426,758.1000000000001 1496.272,758.1000000000001 1496.2719999999997,880.1000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Utilities" data-to="ErrorLog" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1023.9319999999999,273.4 1023.9319999999999,285.4 1024.4904285714285,285.4 1024.4904285714283,770.1000000000001 1276.8034404761902,770.1000000000001 1276.8034404761902,782.1000000000001 1344.071,782.1000000000001 1344.071,880.1000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Utilities" data-to="LLMLog" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="983.344357142857,273.4 983.344357142857,285.4 983.9027857142855,285.4 983.9027857142855,782.1000000000001 827.4469999999999,782.1000000000001 827.4469999999999,880.1000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Utilities" data-to="Local" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="CallLLM routes by provider" points="929.2274999999998,273.4 929.2274999999998,309.4 551.7121785714285,309.4 551.7121785714284,711.5 413.0869999999999,711.5 413.0869999999999,779.8 461.03449999999987,779.8 461.0344999999999,841.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Utilities" data-to="Azure" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="902.1690714285712,273.4 902.1690714285712,285.4 525.7121785714285,285.4 525.7121785714284,687.5 118.1004999999999,687.5 118.10049999999995,841.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Utilities" data-to="Claude" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="969.8151428571427,273.4 969.8151428571427,285.4 970.6381785714284,285.4 970.6381785714284,770.1000000000001 675.145,770.1000000000001 675.145,779.8 634.7244999999999,779.8 634.7245,841.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Utilities" data-to="OpenAI" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="915.6982857142856,273.4 915.6982857142856,297.4 538.7121785714285,297.4 538.7121785714284,699.5 283.6394999999999,699.5 283.6394999999999,841.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Config" data-to="Utilities" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="983.344357142857,154.7 983.344357142857,202.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Utilities" data-to="EmailFilter" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="942.7567142857142,273.4 942.7567142857142,321.4 658.8986785714285,321.4 658.8986785714285,345.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Utilities" data-to="EmailAgent" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="956.2859285714285,273.4 956.2859285714285,333.4 871.8616785714285,333.4 871.8616785714285,345.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="EmailFilter" data-to="BatchFilter" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="658.8986785714285,416.09999999999997 658.8986785714285,445.54999999999995 772.6739999999999,445.54999999999995 772.6739999999999,475" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="EmailAgent" data-to="BatchFilter" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="871.8616785714286,416.09999999999997 871.8616785714286,445.54999999999995 772.6739999999999,445.54999999999995 772.6739999999999,475" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="BatchFilter" data-to="Session" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="772.6739999999999,545.7 772.6739999999999,585.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SPA" data-to="Server" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1791.3435833333335,437.9000000000001 1791.3435833333335,475" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Server" data-to="BridgePy" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1791.3435833333335,528.8 1791.3435833333335,557.025 1629.8800833333335,557.025 1629.8800833333335,585.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Server" data-to="SettingsMgr" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1791.3435833333335,528.8 1791.3435833333335,557.025 1971.3320833333337,557.025 1971.3320833333337,585.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Server" data-to="ChatPy" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1791.3435833333335,528.8 1791.3435833333335,557.025 1791.3435833333335,557.025 1791.3435833333335,585.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="BridgePy" data-to="Commands" data-label="Write .json / Read .result">
+  <rect x="1692.9785000000002" y="720.8000000000002" width="129.322" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1757.6395000000002" y="735.9500000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Write .json / Read .result</text>
+</g>
+<g class="edge-label" data-from="Utilities" data-to="Commands" data-label="Read .json / Write .result
+(Win32 SetTimer 2s)">
+  <rect x="1526.96425" y="706.5000000000001" width="129.32200000000003" height="44.6" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1591.62525" y="728.8000000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="1591.62525" dy="-3.3000000000000007">Read .json / Write .result</tspan><tspan x="1591.62525" dy="14.3">(Win32 SetTimer 2s)</tspan></text>
+</g>
+<g class="edge-label" data-from="Utilities" data-to="Local" data-label="CallLLM routes by provider">
+  <rect x="338.5869999999999" y="718.5" width="148.33" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="412.7519999999999" y="733.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">CallLLM routes by provider</text>
+</g>
+<g class="node" data-id="Config" data-label="Config.bas
+DEFAULT_* constants
+Runtime* variables" data-shape="rectangle">
+  <rect x="893.8268571428571" y="84" width="179.03499999999997" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="983.344357142857" y="119.35" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="983.344357142857" dy="-12.350000000000001">Config.bas</tspan><tspan x="983.344357142857" dy="16.900000000000002">DEFAULT_* constants</tspan><tspan x="983.344357142857" dy="16.900000000000002">Runtime* variables</tspan></text>
+</g>
+<g class="node" data-id="Utilities" data-label="Utilities.bas
+Helpers, CallLLM, JSON,
+logging, bridge poller" data-shape="rectangle">
+  <rect x="888.6398571428571" y="202.7" width="189.40899999999993" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="983.344357142857" y="238.04999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="983.344357142857" dy="-12.350000000000001">Utilities.bas</tspan><tspan x="983.344357142857" dy="16.900000000000002">Helpers, CallLLM, JSON,</tspan><tspan x="983.344357142857" dy="16.900000000000002">logging, bridge poller</tspan></text>
+</g>
+<g class="node" data-id="EmailFilter" data-label="EmailFilter.bas
+ClassifyEmail (10 rules)
+ExecuteAction, LLM tools" data-shape="rectangle">
+  <rect x="562.7121785714285" y="345.4" width="192.373" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="658.8986785714285" y="380.75" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="658.8986785714285" dy="-12.350000000000001">EmailFilter.bas</tspan><tspan x="658.8986785714285" dy="16.900000000000002">ClassifyEmail (10 rules)</tspan><tspan x="658.8986785714285" dy="16.900000000000002">ExecuteAction, LLM tools</tspan></text>
+</g>
+<g class="node" data-id="EmailAgent" data-label="EmailAgent.bas
+Auto-reply, pattern gen,
+sent items scanner" data-shape="rectangle">
+  <rect x="783.0851785714285" y="345.4" width="177.55300000000003" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="871.8616785714286" y="380.75" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="871.8616785714286" dy="-12.350000000000001">EmailAgent.bas</tspan><tspan x="871.8616785714286" dy="16.900000000000002">Auto-reply, pattern gen,</tspan><tspan x="871.8616785714286" dy="16.900000000000002">sent items scanner</tspan></text>
+</g>
+<g class="node" data-id="BatchFilter" data-label="BatchFilter.bas
+Batch macros,
+dry run, reports" data-shape="rectangle">
+  <rect x="705.0159999999998" y="475" width="135.31599999999997" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="772.6739999999999" y="510.35" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="772.6739999999999" dy="-12.350000000000001">BatchFilter.bas</tspan><tspan x="772.6739999999999" dy="16.900000000000002">Batch macros,</tspan><tspan x="772.6739999999999" dy="16.900000000000002">dry run, reports</tspan></text>
+</g>
+<g class="node" data-id="Session" data-label="ThisOutlookSession
+Event handlers,
+learning folders" data-shape="rectangle">
+  <rect x="691.6779999999999" y="585.25" width="161.99200000000002" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="772.6739999999999" y="620.6" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="772.6739999999999" dy="-12.350000000000001">ThisOutlookSession</tspan><tspan x="772.6739999999999" dy="16.900000000000002">Event handlers,</tspan><tspan x="772.6739999999999" dy="16.900000000000002">learning folders</tspan></text>
+</g>
+<g class="node" data-id="SPA" data-label="SPA
+index.html + app.js" data-shape="rectangle">
+  <rect x="1717.7575833333335" y="384.1000000000001" width="147.17200000000003" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1791.3435833333335" y="411.00000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="1791.3435833333335" dy="-3.9000000000000012">SPA</tspan><tspan x="1791.3435833333335" dy="16.900000000000002">index.html + app.js</tspan></text>
+</g>
+<g class="node" data-id="Server" data-label="server.py
+Flask routes" data-shape="rectangle">
+  <rect x="1732.9480833333334" y="475" width="116.79099999999998" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1791.3435833333335" y="501.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="1791.3435833333335" dy="-3.9000000000000012">server.py</tspan><tspan x="1791.3435833333335" dy="16.900000000000002">Flask routes</tspan></text>
+</g>
+<g class="node" data-id="BridgePy" data-label="bridge.py
+File-based IPC" data-shape="rectangle">
+  <rect x="1565.9270833333335" y="585.25" width="127.90599999999999" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1629.8800833333335" y="612.15" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="1629.8800833333335" dy="-3.9000000000000012">bridge.py</tspan><tspan x="1629.8800833333335" dy="16.900000000000002">File-based IPC</tspan></text>
+</g>
+<g class="node" data-id="SettingsMgr" data-label="settings_manager.py
+INI read/write" data-shape="rectangle">
+  <rect x="1888.8540833333336" y="585.25" width="164.95600000000002" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1971.3320833333337" y="612.15" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="1971.3320833333337" dy="-3.9000000000000012">settings_manager.py</tspan><tspan x="1971.3320833333337" dy="16.900000000000002">INI read/write</tspan></text>
+</g>
+<g class="node" data-id="ChatPy" data-label="chat.py
+Keyword parser" data-shape="rectangle">
+  <rect x="1721.8330833333334" y="585.25" width="139.02100000000002" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1791.3435833333335" y="612.15" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="1791.3435833333335" dy="-3.9000000000000012">chat.py</tspan><tspan x="1791.3435833333335" dy="16.900000000000002">Keyword parser</tspan></text>
+</g>
+<g class="node" data-id="SettingsINI" data-label="settings.ini" data-shape="rectangle">
+  <rect x="1773.771" y="880.1000000000001" width="104.194" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1825.868" y="898.5500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">settings.ini</text>
+</g>
+<g class="node" data-id="Senders" data-label="learned_senders.txt" data-shape="rectangle">
+  <rect x="916.436" y="880.1000000000001" width="161.992" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="997.432" y="898.5500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">learned_senders.txt</text>
+</g>
+<g class="node" data-id="Subjects" data-label="learned_subjects.txt" data-shape="rectangle">
+  <rect x="1106.4279999999999" y="880.1000000000001" width="161.992" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1187.424" y="898.5500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">learned_subjects.txt</text>
+</g>
+<g class="node" data-id="Replies" data-label="learned_replies.txt" data-shape="rectangle">
+  <rect x="1419.7219999999998" y="880.1000000000001" width="153.10000000000002" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1496.2719999999997" y="898.5500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">learned_replies.txt</text>
+</g>
+<g class="node" data-id="Commands" data-label="commands/&lt;i&gt;.json
+commands/&lt;/i&gt;.result" data-shape="rectangle">
+  <rect x="1600.822" y="880.1000000000001" width="144.949" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1673.2965" y="907.0000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="1673.2965" dy="-3.9000000000000012">commands/<tspan font-style="italic">.json</tspan></tspan><tspan x="1673.2965" dy="16.900000000000002">commands/.result</tspan></text>
+</g>
+<g class="node" data-id="ErrorLog" data-label="error.log" data-shape="rectangle">
+  <rect x="1296.42" y="880.1000000000001" width="95.30199999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1344.0710000000001" y="898.5500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">error.log</text>
+</g>
+<g class="node" data-id="LLMLog" data-label="llm_debug.log" data-shape="rectangle">
+  <rect x="766.458" y="880.1000000000001" width="121.978" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="827.447" y="898.5500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">llm_debug.log</text>
+</g>
+<g class="node" data-id="Local" data-label="Local
+Ollama / LM Studio" data-shape="rectangle">
+  <rect x="387.078" y="841.8" width="147.913" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="461.0345" y="868.6999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="461.0345" dy="-3.9000000000000012">Local</tspan><tspan x="461.0345" dy="16.900000000000002">Ollama / LM Studio</tspan></text>
+</g>
+<g class="node" data-id="Azure" data-label="Azure OpenAI" data-shape="rectangle">
+  <rect x="56" y="841.8" width="124.20099999999998" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="118.10049999999998" y="860.25" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Azure OpenAI</text>
+</g>
+<g class="node" data-id="Claude" data-label="Anthropic Claude" data-shape="rectangle">
+  <rect x="562.991" y="841.8" width="143.467" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="634.7245" y="860.25" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Anthropic Claude</text>
+</g>
+<g class="node" data-id="OpenAI" data-label="OpenAI-compatible
+OpenRouter / Groq" data-shape="rectangle">
+  <rect x="208.20099999999996" y="841.8" width="150.877" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="283.6395" y="868.6999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="283.6395" dy="-3.9000000000000012">OpenAI-compatible</tspan><tspan x="283.6395" dy="16.900000000000002">OpenRouter / Groq</tspan></text>
+</g>
+</svg>

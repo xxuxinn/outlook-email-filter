@@ -1,0 +1,56 @@
+flowchart TD
+    Start([New Email Arrives]) --> Extract[Extract sender, subject, body, domain]
+
+    Extract --> R0{Rule 0:<br/>Learned Sender?}
+    R0 -->|KEEP rule| KEEP([KEEP])
+    R0 -->|DELETE rule| DELETE([DELETE])
+    R0 -->|No rule| R05
+
+    R05{Rule 0.5:<br/>Learned Subject<br/>DELETE match?}
+    R05 -->|Yes| DELETE
+    R05 -->|No| R1
+
+    R1{Rule 1:<br/>Protected Domain?}
+    R1 -->|Yes| MOVE([MOVE to Protected])
+    R1 -->|No| R2
+
+    R2{Rule 2:<br/>Personally<br/>Addressed?}
+    R2 -->|Name in subject<br/>or greeting in body| KEEP
+    R2 -->|No| R3
+
+    R3{Rule 3:<br/>Org Tags?<br/>MM, HRO, CUS, ToXX}
+    R3 -->|Yes| KEEP
+    R3 -->|No| R4
+
+    R4{Rule 4:<br/>VIP Keywords?<br/>thesis, deadline...}
+    R4 -->|Yes| KEEP
+    R4 -->|No| R5
+
+    R5{Rule 5:<br/>RE: Reply?}
+    R5 -->|Yes| KEEP
+    R5 -->|No| R6
+
+    R6{Rule 6:<br/>FW: Forward?}
+    R6 -->|Yes| KEEP
+    R6 -->|No| R7
+
+    R7{Rule 7:<br/>Known Spam<br/>Sender?}
+    R7 -->|Yes| DELETE
+    R7 -->|No| R8
+
+    R8{Rule 8:<br/>Sender Pattern?<br/>noreply, marketing...}
+    R8 -->|Yes| DELETE
+    R8 -->|No| R9
+
+    R9{Rule 9:<br/>Subject Pattern?<br/>digest, newsletter...}
+    R9 -->|Yes| DELETE
+    R9 -->|No| R10
+
+    R10{Rule 10:<br/>LLM Enabled?}
+    R10 -->|Yes| LLM[Call LLM via CallLLM]
+    R10 -->|No| REVIEW([MOVE to Review])
+
+    LLM --> LLMResult{LLM Says?}
+    LLMResult -->|DELETE| DELETE
+    LLMResult -->|KEEP| KEEP
+    LLMResult -->|Unclear / Error| REVIEW

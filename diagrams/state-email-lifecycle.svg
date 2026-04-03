@@ -1,0 +1,292 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1429.3038749999998 1546.1" width="1429.3038749999998" height="1546.1" style="--bg:#FFFFFF;--fg:#27272A;background:var(--bg)">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="classify" data-label="Classification">
+  <rect x="657.94975" y="339.8" width="422.812" height="394.4" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="657.94975" y="339.8" width="422.812" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="669.94975" y="353.8" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Classification</text>
+</g>
+<g class="subgraph" data-id="actions" data-label="Actions">
+  <rect x="490.9816249999999" y="856.4999999999999" width="627.1691666666667" height="250.1" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="490.9816249999999" y="856.4999999999999" width="627.1691666666667" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="502.9816249999999" y="870.4999999999999" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Actions</text>
+</g>
+<g class="subgraph" data-id="learn" data-label="Learning">
+  <rect x="535.6134999999999" y="1234.8999999999999" width="761.0039999999999" height="120.9" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="535.6134999999999" y="1234.8999999999999" width="761.0039999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="547.6134999999999" y="1248.8999999999999" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Learning</text>
+</g>
+<g class="subgraph" data-id="agent" data-label="Agent Features">
+  <rect x="84.20737499999996" y="1234.8999999999999" width="330.632" height="96.9" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="84.20737499999996" y="1234.8999999999999" width="330.632" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="96.20737499999996" y="1248.8999999999999" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Agent Features</text>
+</g>
+<polyline class="edge" data-from="_start" data-to="Inbox" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Email arrives" points="623.732,68 623.7320000000001,184.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Inbox" data-to="classify" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Real-time filter
+or batch filter" points="631.1874,221.2 631.1874,245.2 869.35575,245.2 869.35575,339.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="classify" data-to="keep" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="KEEP decision" points="798.8870833333333,734.1999999999999 798.8870833333333,770.1999999999999 676.121625,770.1999999999999 676.121625,838.4999999999999 656.7436249999998,838.4999999999999 656.7436249999998,1017.6999999999999 671.5739583333332,1017.6999999999999 671.5739583333332,1053.6999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="classify" data-to="delete" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="DELETE decision" points="1010.2930833333334,734.1999999999999 1010.2930833333334,770.1999999999999 1102.729375,770.1999999999999 1102.729375,838.4999999999999 1085.7671249999999,838.4999999999999 1085.7671249999999,1017.6999999999999 1070.3834583333332,1017.6999999999999 1070.3834583333332,1053.6999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="classify" data-to="protect" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="MOVE_II (protected domain)" points="728.4184166666666,734.1999999999999 728.4184166666666,758.1999999999999 554.573625,758.1999999999999 554.573625,838.4999999999999 576.8626249999999,838.4999999999999 576.8626249999999,900.4999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="classify" data-to="llmreview" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="LLM_REVIEW (LLM enabled)" points="869.3557500000001,734.1999999999999 869.3557500000001,770.1999999999999 805.3733749999999,770.1999999999999 805.3733749999999,838.4999999999999 822.3356249999999,838.4999999999999 822.3356249999999,900.4999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="classify" data-to="review" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="LLM_REVIEW (LLM disabled)" points="939.8244166666667,734.1999999999999 939.8244166666667,770.1999999999999 967.6133749999999,770.1999999999999 967.6133749999999,838.4999999999999 1011.3176249999999,838.4999999999999 1011.3176249999999,1017.6999999999999 934.4844583333332,1017.6999999999999 934.4844583333332,1053.6999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="keep" data-to="lk" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="User drags to LearnKeep" points="703.8731249999998,1090.6 703.8731249999998,1148.6 773.7384999999998,1148.6 773.7384999999998,1192.8999999999999 868.0051666666665,1192.8999999999999 868.0051666666665,1290.8999999999999 993.3992499999998,1290.8999999999999 993.3992499999998,1290.8999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="keep" data-to="ld" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="User drags to LearnDelete" points="684.4936249999998,1090.6 684.4936249999998,1148.6 628.7544999999999,1148.6 628.7544999999999,1204.8999999999999 827.2188333333331,1204.8999999999999 827.2188333333331,1290.8999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="delete" data-to="lk" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="User drags to LearnKeep
+(rule reversal + rescue)" points="1054.4997916666666,1090.6 1054.4997916666666,1134.3 1205.1864999999998,1134.3 1205.1864999999998,1216.8999999999999 1066.6147499999997,1216.8999999999999 1066.6147499999997,1290.8999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="review" data-to="lk" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="User drags to LearnKeep" points="934.4844583333332,1090.6 934.4844583333331,1148.6 1062.9544999999998,1148.6 1062.9544999999998,1216.8999999999999 1030.0069999999998,1216.8999999999999 1030.0069999999998,1290.8999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="review" data-to="ld" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="User drags to LearnDelete" points="890.1201249999999,1090.6 890.1201249999998,1148.6 917.9704999999999,1148.6 917.9704999999999,1216.8999999999999 878.0051666666665,1216.8999999999999 878.0051666666665,1290.8999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Inbox" data-to="ls" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="User drags to LearnSubjectDelete" points="616.2766,221.2 616.2766,746.1999999999999 310.5,746.1999999999999 310.5,1216.8999999999999 650.0229999999999,1216.8999999999999 650.0229999999999,1290.8999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Inbox" data-to="lr" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="User drags sent reply" points="646.0982,221.2 646.0982,233.2 1329.597875,233.2 1329.597875,1216.8999999999999 1205.9199999999998,1216.8999999999999 1205.9199999999998,1290.8999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="lk" data-to="_end" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Rule saved to learned_senders.txt" points="1030.007,1327.8 1030.0069999999998,1397.8 1028.6515,1397.8 1028.6515,1466.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ld" data-to="_end2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Rule saved to learned_senders.txt" points="852.6119999999999,1327.8 852.6119999999999,1397.8 846.0274999999999,1397.8 846.0274999999999,1466.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ls" data-to="_end3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Rule saved to learned_subjects.txt" points="650.0229999999999,1327.8 650.0229999999999,1466.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="lr" data-to="_end4" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Pair saved to learned_replies.txt" points="1205.9199999999998,1327.8 1205.9199999999998,1397.8 1207.2754999999997,1397.8 1207.2754999999997,1466.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="keep" data-to="autoreply" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="AutoReplyOnArrival=True" points="665.1141249999998,1090.6 665.1141249999997,1136.6 482.3644999999998,1136.6 482.3644999999998,1204.8999999999999 330.4403749999998,1204.8999999999999 330.44037499999996,1290.8999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="autoreply" data-to="_end5" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Draft saved to Drafts folder" points="330.44037499999996,1327.8 330.4403749999999,1466.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Inbox" data-to="scansent" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="ScanSentForReplyPatterns macro" points="601.3658,221.2 601.3658,734.1999999999999 127,734.1999999999999 127,1216.8999999999999 167.124375,1216.8999999999999 167.124375,1290.8999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="scansent" data-to="_end6" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Pairs saved to learned_replies.txt" points="167.12437499999996,1327.8 167.12437499999987,1466.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="_start2" data-to="RuleChain" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="ClassifyEmail()" points="869.35575,411.8 869.35575,528.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RuleChain" data-to="LearnedRule" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Rule 0/0.5 match" points="869.35575,565 869.35575,681.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RuleChain" data-to="RuleBased" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Rules 1-9 match" points="895.03375,565 895.03375,577 1011.1827499999999,577 1011.1827499999999,681.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RuleChain" data-to="Ambiguous" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No rule matched" points="843.6777500000001,565 843.6777500000001,577 727.52875,577 727.52875,681.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="llmreview" data-to="keep" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="LLM says KEEP" points="793.3231249999999,937.3999999999999 793.3231249999999,949.3999999999999 712.2436249999998,949.3999999999999 712.2436249999998,1017.6999999999998 697.4132916666665,1017.6999999999998 697.4132916666665,1053.6999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="llmreview" data-to="delete" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="LLM says DELETE" points="851.348125,937.3999999999999 851.348125,949.3999999999999 949.9096249999999,949.3999999999999 949.9096249999999,1029.6999999999998 1038.616125,1029.6999999999998 1038.616125,1053.6999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="llmreview" data-to="review" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="LLM unclear/error" points="822.3356249999999,937.3999999999999 822.3356249999999,949.3999999999999 818.8956249999999,949.3999999999999 818.8956249999999,1017.6999999999998 890.1201249999999,1017.6999999999998 890.1201249999999,1053.6999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="_start" data-to="Inbox" data-label="Email arrives">
+  <rect x="583.232" y="111" width="80.02000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="623.242" y="126.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Email arrives</text>
+</g>
+<g class="edge-label" data-from="Inbox" data-to="classify" data-label="Real-time filter
+or batch filter">
+  <rect x="828.35575" y="252.2" width="81.80200000000002" height="44.6" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="869.25675" y="274.5" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="869.25675" dy="-3.3000000000000007">Real-time filter</tspan><tspan x="869.25675" dy="14.3">or batch filter</tspan></text>
+</g>
+<g class="edge-label" data-from="classify" data-to="keep" data-label="KEEP decision">
+  <rect x="631.621625" y="777.1999999999999" width="88.33600000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="675.789625" y="792.3499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">KEEP decision</text>
+</g>
+<g class="edge-label" data-from="classify" data-to="delete" data-label="DELETE decision">
+  <rect x="1051.229375" y="777.1999999999999" width="102.59200000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1102.525375" y="792.3499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">DELETE decision</text>
+</g>
+<g class="edge-label" data-from="classify" data-to="protect" data-label="MOVE_II (protected domain)">
+  <rect x="481.073625" y="777.1999999999999" width="146.548" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="554.347625" y="792.3499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">MOVE_II (protected domain)</text>
+</g>
+<g class="edge-label" data-from="classify" data-to="llmreview" data-label="LLM_REVIEW (LLM enabled)">
+  <rect x="726.3733749999999" y="777.1999999999999" width="157.23999999999998" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="804.9933749999999" y="792.3499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">LLM_REVIEW (LLM enabled)</text>
+</g>
+<g class="edge-label" data-from="classify" data-to="review" data-label="LLM_REVIEW (LLM disabled)">
+  <rect x="887.6133749999999" y="777.1999999999999" width="159.61599999999999" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="967.4213749999999" y="792.3499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">LLM_REVIEW (LLM disabled)</text>
+</g>
+<g class="edge-label" data-from="keep" data-to="lk" data-label="User drags to LearnKeep">
+  <rect x="704.2384999999998" y="1155.6" width="138.23200000000003" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="773.3544999999998" y="1170.75" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">User drags to LearnKeep</text>
+</g>
+<g class="edge-label" data-from="keep" data-to="ld" data-label="User drags to LearnDelete">
+  <rect x="557.2544999999999" y="1155.6" width="142.98399999999998" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="628.7464999999999" y="1170.75" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">User drags to LearnDelete</text>
+</g>
+<g class="edge-label" data-from="delete" data-to="lk" data-label="User drags to LearnKeep
+(rule reversal + rescue)">
+  <rect x="1135.6864999999998" y="1141.3" width="138.23200000000003" height="44.6" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1204.8024999999998" y="1163.6" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="1204.8024999999998" dy="-3.3000000000000007">User drags to LearnKeep</tspan><tspan x="1204.8024999999998" dy="14.3">(rule reversal + rescue)</tspan></text>
+</g>
+<g class="edge-label" data-from="review" data-to="lk" data-label="User drags to LearnKeep">
+  <rect x="993.4545" y="1155.6" width="138.23200000000003" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1062.5705" y="1170.75" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">User drags to LearnKeep</text>
+</g>
+<g class="edge-label" data-from="review" data-to="ld" data-label="User drags to LearnDelete">
+  <rect x="846.4704999999998" y="1155.6" width="142.98399999999998" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="917.9624999999997" y="1170.75" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">User drags to LearnDelete</text>
+</g>
+<g class="edge-label" data-from="Inbox" data-to="ls" data-label="User drags to LearnSubjectDelete">
+  <rect x="221.00000000000003" y="1155.6" width="178.62399999999997" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="310.312" y="1170.75" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">User drags to LearnSubjectDelete</text>
+</g>
+<g class="edge-label" data-from="Inbox" data-to="lr" data-label="User drags sent reply">
+  <rect x="1269.097875" y="1109" width="120.41200000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1329.3038749999998" y="1124.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">User drags sent reply</text>
+</g>
+<g class="edge-label" data-from="lk" data-to="_end" data-label="Rule saved to learned_senders.txt">
+  <rect x="939.1514999999998" y="1404.8" width="178.624" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1028.4634999999998" y="1419.95" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Rule saved to learned_senders.txt</text>
+</g>
+<g class="edge-label" data-from="ld" data-to="_end2" data-label="Rule saved to learned_senders.txt">
+  <rect x="756.5274999999999" y="1404.8" width="178.624" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="845.8394999999999" y="1419.95" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Rule saved to learned_senders.txt</text>
+</g>
+<g class="edge-label" data-from="ls" data-to="_end3" data-label="Rule saved to learned_subjects.txt">
+  <rect x="560.5229999999999" y="1404.8" width="178.62399999999997" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="649.8349999999999" y="1419.95" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Rule saved to learned_subjects.txt</text>
+</g>
+<g class="edge-label" data-from="lr" data-to="_end4" data-label="Pair saved to learned_replies.txt">
+  <rect x="1121.7755" y="1404.8" width="170.308" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1206.9295" y="1419.95" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Pair saved to learned_replies.txt</text>
+</g>
+<g class="edge-label" data-from="keep" data-to="autoreply" data-label="AutoReplyOnArrival=True">
+  <rect x="410.8644999999999" y="1155.6" width="142.39000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="482.0594999999999" y="1170.75" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">AutoReplyOnArrival=True</text>
+</g>
+<g class="edge-label" data-from="autoreply" data-to="_end5" data-label="Draft saved to Drafts folder">
+  <rect x="259.4403749999999" y="1380.8" width="141.20200000000003" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="330.0413749999999" y="1395.95" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Draft saved to Drafts folder</text>
+</g>
+<g class="edge-label" data-from="Inbox" data-to="scansent" data-label="ScanSentForReplyPatterns macro">
+  <rect x="36" y="1155.6" width="181.00000000000003" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="126.50000000000001" y="1170.75" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">ScanSentForReplyPatterns macro</text>
+</g>
+<g class="edge-label" data-from="scansent" data-to="_end6" data-label="Pairs saved to learned_replies.txt">
+  <rect x="78.62437499999987" y="1380.8" width="176.248" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="166.74837499999987" y="1395.95" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Pairs saved to learned_replies.txt</text>
+</g>
+<g class="edge-label" data-from="_start2" data-to="RuleChain" data-label="ClassifyEmail()">
+  <rect x="825.85575" y="454.80000000000007" width="86.55400000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="869.13275" y="469.95000000000005" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">ClassifyEmail()</text>
+</g>
+<g class="edge-label" data-from="RuleChain" data-to="LearnedRule" data-label="Rule 0/0.5 match">
+  <rect x="822.3557500000001" y="608.0000000000001" width="93.08800000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="868.89975" y="623.1500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Rule 0/0.5 match</text>
+</g>
+<g class="edge-label" data-from="RuleChain" data-to="RuleBased" data-label="Rules 1-9 match">
+  <rect x="967.18275" y="608.0000000000001" width="87.14800000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1010.75675" y="623.1500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Rules 1-9 match</text>
+</g>
+<g class="edge-label" data-from="RuleChain" data-to="Ambiguous" data-label="No rule matched">
+  <rect x="681.0287500000001" y="608.0000000000001" width="92.49400000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="727.27575" y="623.1500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No rule matched</text>
+</g>
+<g class="edge-label" data-from="llmreview" data-to="keep" data-label="LLM says KEEP">
+  <rect x="663.7436249999998" y="980.4" width="96.65199999999999" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="712.0696249999999" y="995.55" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">LLM says KEEP</text>
+</g>
+<g class="edge-label" data-from="llmreview" data-to="delete" data-label="LLM says DELETE">
+  <rect x="894.409625" y="980.4" width="110.90799999999999" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="949.863625" y="995.55" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">LLM says DELETE</text>
+</g>
+<g class="edge-label" data-from="llmreview" data-to="review" data-label="LLM unclear/error">
+  <rect x="764.3956249999999" y="980.4" width="108.53200000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="818.661625" y="995.55" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">LLM unclear/error</text>
+</g>
+<g class="node" data-id="_start" data-label="" data-shape="state-start">
+  <circle cx="623.732" cy="54" r="12" fill="var(--_text)" stroke="none" />
+</g>
+<g class="node" data-id="Inbox" data-label="Inbox" data-shape="rounded">
+  <rect x="586.455" y="184.3" width="74.554" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="623.7320000000001" y="202.75" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Inbox</text>
+</g>
+<g class="node" data-id="_end" data-label="" data-shape="state-end">
+  <circle cx="1028.6515" cy="1480.1" r="12" fill="none" stroke="var(--_text)" stroke-width="1.5" />
+  <circle cx="1028.6515" cy="1480.1" r="8" fill="var(--_text)" stroke="none" />
+</g>
+<g class="node" data-id="_end2" data-label="" data-shape="state-end">
+  <circle cx="846.0274999999999" cy="1480.1" r="12" fill="none" stroke="var(--_text)" stroke-width="1.5" />
+  <circle cx="846.0274999999999" cy="1480.1" r="8" fill="var(--_text)" stroke="none" />
+</g>
+<g class="node" data-id="_end3" data-label="" data-shape="state-end">
+  <circle cx="650.0229999999999" cy="1480.1" r="12" fill="none" stroke="var(--_text)" stroke-width="1.5" />
+  <circle cx="650.0229999999999" cy="1480.1" r="8" fill="var(--_text)" stroke="none" />
+</g>
+<g class="node" data-id="_end4" data-label="" data-shape="state-end">
+  <circle cx="1207.2755" cy="1480.1" r="12" fill="none" stroke="var(--_text)" stroke-width="1.5" />
+  <circle cx="1207.2755" cy="1480.1" r="8" fill="var(--_text)" stroke="none" />
+</g>
+<g class="node" data-id="_end5" data-label="" data-shape="state-end">
+  <circle cx="330.4403749999999" cy="1480.1" r="12" fill="none" stroke="var(--_text)" stroke-width="1.5" />
+  <circle cx="330.4403749999999" cy="1480.1" r="8" fill="var(--_text)" stroke="none" />
+</g>
+<g class="node" data-id="_end6" data-label="" data-shape="state-end">
+  <circle cx="167.12437499999987" cy="1480.1" r="12" fill="none" stroke="var(--_text)" stroke-width="1.5" />
+  <circle cx="167.12437499999987" cy="1480.1" r="8" fill="var(--_text)" stroke="none" />
+</g>
+<g class="node" data-id="_start2" data-label="" data-shape="state-start">
+  <circle cx="869.35575" cy="397.8" r="12" fill="var(--_text)" stroke="none" />
+</g>
+<g class="node" data-id="RuleChain" data-label="RuleChain" data-shape="rounded">
+  <rect x="817.99975" y="528.1" width="102.71199999999999" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="869.35575" y="546.5500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">RuleChain</text>
+</g>
+<g class="node" data-id="LearnedRule" data-label="LearnedRule" data-shape="rounded">
+  <rect x="809.10775" y="681.3" width="120.49599999999998" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="869.35575" y="699.75" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">LearnedRule</text>
+</g>
+<g class="node" data-id="RuleBased" data-label="RuleBased" data-shape="rounded">
+  <rect x="957.60375" y="681.3" width="107.158" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1011.1827499999999" y="699.75" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">RuleBased</text>
+</g>
+<g class="node" data-id="Ambiguous" data-label="Ambiguous" data-shape="rounded">
+  <rect x="673.94975" y="681.3" width="107.158" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="727.52875" y="699.75" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Ambiguous</text>
+</g>
+<g class="node" data-id="keep" data-label="KEEP" data-shape="rounded">
+  <rect x="645.7346249999998" y="1053.6999999999998" width="77.518" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="684.4936249999998" y="1072.1499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">KEEP</text>
+</g>
+<g class="node" data-id="delete" data-label="DELETE" data-shape="rounded">
+  <rect x="1006.8487916666666" y="1053.6999999999998" width="95.30199999999999" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1054.4997916666666" y="1072.1499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">DELETE</text>
+</g>
+<g class="node" data-id="protect" data-label="MOVE Protected" data-shape="rounded">
+  <rect x="506.9816249999999" y="900.4999999999999" width="139.762" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="576.8626249999999" y="918.9499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">MOVE Protected</text>
+</g>
+<g class="node" data-id="llmreview" data-label="LLM Review" data-shape="rounded">
+  <rect x="764.310625" y="900.4999999999999" width="116.05" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="822.3356249999999" y="918.9499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">LLM Review</text>
+</g>
+<g class="node" data-id="review" data-label="Move to Review" data-shape="rounded">
+  <rect x="845.7557916666666" y="1053.6999999999998" width="133.09299999999996" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="912.3022916666666" y="1072.1499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Move to Review</text>
+</g>
+<g class="node" data-id="lk" data-label="LearnKeep folder" data-shape="rounded">
+  <rect x="956.7914999999999" y="1290.8999999999999" width="146.43099999999998" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1030.0069999999998" y="1309.35" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">LearnKeep folder</text>
+</g>
+<g class="node" data-id="ld" data-label="LearnDelete folder" data-shape="rounded">
+  <rect x="776.4324999999999" y="1290.8999999999999" width="152.35900000000004" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="852.6119999999999" y="1309.35" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">LearnDelete folder</text>
+</g>
+<g class="node" data-id="ls" data-label="LearnSubjectDelete folder" data-shape="rounded">
+  <rect x="551.6134999999999" y="1290.8999999999999" width="196.81899999999996" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="650.0229999999999" y="1309.35" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">LearnSubjectDelete folder</text>
+</g>
+<g class="node" data-id="lr" data-label="LearnReply folder" data-shape="rounded">
+  <rect x="1131.2224999999999" y="1290.8999999999999" width="149.395" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1205.9199999999998" y="1309.35" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">LearnReply folder</text>
+</g>
+<g class="node" data-id="autoreply" data-label="Auto-Reply Draft" data-shape="rounded">
+  <rect x="262.04137499999996" y="1290.8999999999999" width="136.798" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="330.44037499999996" y="1309.35" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Auto-Reply Draft</text>
+</g>
+<g class="node" data-id="scansent" data-label="Scan Sent Items" data-shape="rounded">
+  <rect x="100.20737499999996" y="1290.8999999999999" width="133.834" height="36.900000000000006" rx="6" ry="6" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="167.12437499999996" y="1309.35" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Scan Sent Items</text>
+</g>
+</svg>
