@@ -1,0 +1,162 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#4A90D9', 'primaryTextColor': '#fff', 'lineColor': '#555' }}}%%
+
+flowchart TD
+    %% ===================================================================
+    %%  FLOW A: User teaches a DELETE rule (drag to LearnDelete folder)
+    %% ===================================================================
+
+    subgraph LEARN_DELETE["<b>Flow A: Learn DELETE Rule</b><br/><small>User drags email → LearnDelete folder</small>"]
+        direction TB
+        LD_START(["👤 User drags email<br/>to LearnDelete"])
+        style LD_START fill:#E91E63,color:#fff,stroke:#AD1457
+
+        LD_EVENT["<b>learnDeleteItems_ItemAdd</b><br/><small>ThisOutlookSession.bas</small>"]
+        LD_EXTRACT["GetSenderEmail(mail)<br/><small>Extract SMTP address</small>"]
+        LD_LOOKUP{"Previous rule<br/>for this sender?"}
+        LD_RECORD["<b>RecordLearnedSender</b><br/><small>email|DELETE|timestamp<br/>→ learned_senders.txt</small>"]
+        LD_REVERSAL{"Was it<br/>KEEP before?"}
+        LD_CLEANUP["<b>DeleteSenderFromInbox</b><br/><small>Delete all emails from<br/>this sender in Inbox</small>"]
+        LD_LOG["📝 Log: LEARNED DELETE"]
+        LD_SYNC["☁️ SyncLearnedRulesAuto<br/><small>next startup/quit</small>"]
+        LD_DONE(["✔ Future emails from<br/>this sender → auto-DELETE"])
+        style LD_DONE fill:#78909C,color:#fff
+
+        LD_START --> LD_EVENT
+        LD_EVENT --> LD_EXTRACT
+        LD_EXTRACT --> LD_LOOKUP
+        LD_LOOKUP --> LD_RECORD
+        LD_RECORD --> LD_REVERSAL
+        LD_REVERSAL -- "Yes (rule reversal)" --> LD_CLEANUP
+        LD_REVERSAL -- "No / new rule" --> LD_LOG
+        LD_CLEANUP --> LD_LOG
+        LD_LOG --> LD_SYNC
+        LD_SYNC --> LD_DONE
+    end
+
+    %% ===================================================================
+    %%  FLOW B: User teaches a KEEP rule (drag to LearnKeep folder)
+    %% ===================================================================
+
+    subgraph LEARN_KEEP["<b>Flow B: Learn KEEP Rule</b><br/><small>User drags email → LearnKeep folder</small>"]
+        direction TB
+        LK_START(["👤 User drags email<br/>to LearnKeep"])
+        style LK_START fill:#4CAF50,color:#fff,stroke:#2E7D32
+
+        LK_EVENT["<b>learnKeepItems_ItemAdd</b><br/><small>ThisOutlookSession.bas</small>"]
+        LK_EXTRACT["GetSenderEmail(mail)"]
+        LK_RECORD["<b>RecordLearnedSender</b><br/><small>email|KEEP|timestamp<br/>→ learned_senders.txt</small>"]
+        LK_REVERSAL{"Was it<br/>DELETE before?"}
+        LK_RESTORE["<b>RestoreSenderFromDeleted</b><br/><small>Rescue emails from<br/>Deleted Items → Inbox</small>"]
+        LK_LOG["📝 Log: LEARNED KEEP"]
+        LK_DONE(["✔ Future emails from<br/>this sender → auto-KEEP"])
+        style LK_DONE fill:#78909C,color:#fff
+
+        LK_START --> LK_EVENT
+        LK_EVENT --> LK_EXTRACT
+        LK_EXTRACT --> LK_RECORD
+        LK_RECORD --> LK_REVERSAL
+        LK_REVERSAL -- "Yes (rule reversal)" --> LK_RESTORE
+        LK_REVERSAL -- "No / new rule" --> LK_LOG
+        LK_RESTORE --> LK_LOG
+        LK_LOG --> LK_DONE
+    end
+
+    %% ===================================================================
+    %%  FLOW C: User teaches subject DELETE (drag to LearnSubjectDelete)
+    %% ===================================================================
+
+    subgraph LEARN_SUBJECT["<b>Flow C: Learn Subject DELETE Rule</b><br/><small>User drags email → LearnSubjectDelete folder</small>"]
+        direction TB
+        LS_START(["👤 User drags email<br/>to LearnSubjectDelete"])
+        style LS_START fill:#FF9800,color:#fff,stroke:#E65100
+
+        LS_EVENT["<b>learnSubjectDeleteItems_ItemAdd</b><br/><small>ThisOutlookSession.bas</small>"]
+        LS_SANITIZE["SanitizeSubject(mail.Subject)<br/><small>Strip CR/LF/pipe/null</small>"]
+        LS_RECORD["<b>RecordLearnedSubject</b><br/><small>subject|DELETE|timestamp<br/>→ learned_subjects.txt</small>"]
+        LS_LOG["📝 Log: LEARNED SUBJECT DELETE"]
+        LS_DONE(["✔ Future emails with<br/>matching subject substring<br/>→ auto-DELETE at Rule 0.5"])
+        style LS_DONE fill:#78909C,color:#fff
+
+        LS_START --> LS_EVENT
+        LS_EVENT --> LS_SANITIZE
+        LS_SANITIZE --> LS_RECORD
+        LS_RECORD --> LS_LOG
+        LS_LOG --> LS_DONE
+    end
+
+    %% ===================================================================
+    %%  FLOW D: Auto-reply / Draft reply
+    %% ===================================================================
+
+    subgraph AUTO_REPLY["<b>Flow D: Draft Auto-Reply</b><br/><small>DraftReplyForSelected macro or auto-trigger</small>"]
+        direction TB
+        AR_START(["👤 User selects email<br/>→ runs DraftReplyForSelected<br/><i>or auto-triggered on KEEP</i>"])
+        style AR_START fill:#9C27B0,color:#fff,stroke:#6A1B9A
+
+        AR_LOAD["<b>LoadRecentReplyPairs(N)</b><br/><small>Read last N entries from<br/>learned_replies.txt</small>"]
+        AR_BUILD["Build few-shot prompt<br/><small>System: reply persona<br/>Examples: learned pairs<br/>Current: email to reply to</small>"]
+        AR_LLM["<b>CallLLM</b><br/><small>Temperature: 0.7<br/>MaxTokens: 800</small>"]
+
+        AR_PROVIDER{"Provider?"}
+        AR_LOCAL["Ollama / LM Studio"]
+        AR_AZURE["Azure OpenAI"]
+        AR_CLAUDE["Anthropic Claude"]
+        AR_OPENAI["OpenRouter / Groq"]
+
+        AR_CREATE["Create reply MailItem<br/><small>mail.Reply → set .Body</small>"]
+        AR_SAVE["Save to Drafts folder"]
+        AR_DONE(["✔ Draft ready in<br/>Outlook Drafts"])
+        style AR_DONE fill:#78909C,color:#fff
+
+        AR_START --> AR_LOAD
+        AR_LOAD --> AR_BUILD
+        AR_BUILD --> AR_LLM
+
+        AR_LLM --> AR_PROVIDER
+        AR_PROVIDER --> AR_LOCAL
+        AR_PROVIDER --> AR_AZURE
+        AR_PROVIDER --> AR_CLAUDE
+        AR_PROVIDER --> AR_OPENAI
+
+        AR_LOCAL --> AR_CREATE
+        AR_AZURE --> AR_CREATE
+        AR_CLAUDE --> AR_CREATE
+        AR_OPENAI --> AR_CREATE
+
+        AR_CREATE --> AR_SAVE
+        AR_SAVE --> AR_DONE
+    end
+
+    %% ===================================================================
+    %%  FLOW E: Learn reply style
+    %% ===================================================================
+
+    subgraph LEARN_REPLY["<b>Flow E: Learn Reply Style</b><br/><small>User drags sent reply → LearnReply folder</small>"]
+        direction TB
+        LR_START(["👤 User drags sent reply<br/>to LearnReply"])
+        style LR_START fill:#3F51B5,color:#fff,stroke:#1A237E
+
+        LR_EVENT["<b>learnReplyItems_ItemAdd</b><br/><small>ThisOutlookSession.bas</small>"]
+        LR_STRIP["Strip RE:/AW: prefix<br/>→ originalSubject"]
+        LR_EXTRACT_REPLY["<b>ExtractMyReplyFromBody</b><br/><small>Text before ---- delimiter</small>"]
+        LR_EXTRACT_ORIG["<b>ExtractOriginalFromBody</b><br/><small>Text after delimiter<br/>(first 500 chars)</small>"]
+        LR_SENDER["Get original sender<br/><small>mail.Recipients(1).Name</small>"]
+        LR_RECORD["<b>RecordLearnedReply</b><br/><small>subject|from|orig_body|reply_body|timestamp<br/>→ learned_replies.txt</small>"]
+        LR_DONE(["✔ Reply pair saved<br/>for few-shot learning"])
+        style LR_DONE fill:#78909C,color:#fff
+
+        LR_START --> LR_EVENT
+        LR_EVENT --> LR_STRIP
+        LR_STRIP --> LR_EXTRACT_REPLY
+        LR_EXTRACT_REPLY --> LR_EXTRACT_ORIG
+        LR_EXTRACT_ORIG --> LR_SENDER
+        LR_SENDER --> LR_RECORD
+        LR_RECORD --> LR_DONE
+    end
+
+    %% Styling
+    classDef deleteFlow fill:#FFCDD2,stroke:#D32F2F,color:#B71C1C
+    classDef keepFlow fill:#C8E6C9,stroke:#388E3C,color:#1B5E20
+    classDef subjectFlow fill:#FFE0B2,stroke:#F57C00,color:#E65100
+    classDef replyFlow fill:#E8EAF6,stroke:#3F51B5,color:#1A237E
+    classDef agentFlow fill:#F3E5F5,stroke:#9C27B0,color:#4A148C

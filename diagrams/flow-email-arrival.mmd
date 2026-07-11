@@ -1,0 +1,153 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#4A90D9', 'primaryTextColor': '#fff', 'lineColor': '#555', 'secondaryColor': '#F5A623' }}}%%
+
+flowchart TD
+    START(["📨 New email arrives in Inbox"])
+    style START fill:#4CAF50,color:#fff,stroke:#2E7D32
+
+    TYPECHECK{"Is it a<br/>MailItem?"}
+    CLASSIFY["<b>ClassifyEmail(mail)</b><br/><small>EmailFilter.bas</small>"]
+
+    subgraph RULES["<b>10-Rule Priority Chain</b> — first match wins"]
+        direction TB
+        R0{"<b>Rule 0</b><br/>Learned sender<br/>rule exists?"}
+        R0_KEEP["KEEP<br/><small>learned sender</small>"]
+        R0_DEL["DELETE<br/><small>learned sender</small>"]
+
+        R05{"<b>Rule 0.5</b><br/>Learned subject<br/>DELETE match?"}
+        R05_DEL["DELETE<br/><small>learned subject</small>"]
+
+        R1{"<b>Rule 1</b><br/>Protected<br/>domain?"}
+        R1_MOVE["MOVE_II<br/><small>→ Protected folder</small>"]
+
+        R2{"<b>Rule 2</b><br/>Personally<br/>addressed?"}
+        R2_KEEP["KEEP<br/><small>name/greeting match</small>"]
+
+        R3{"<b>Rule 3</b><br/>Org tags?<br/><small>[MM],[HRO],etc.</small>"}
+        R3_KEEP["KEEP<br/><small>org tag</small>"]
+
+        R4{"<b>Rule 4</b><br/>VIP subject<br/>keywords?"}
+        R4_KEEP["KEEP<br/><small>VIP keyword</small>"]
+
+        R5{"<b>Rule 5</b><br/>RE: chain?"}
+        R5_KEEP["KEEP<br/><small>reply chain</small>"]
+
+        R6{"<b>Rule 6</b><br/>FW: chain?"}
+        R6_KEEP["KEEP<br/><small>forwarded</small>"]
+
+        R7{"<b>Rule 7</b><br/>Known spam<br/>sender?"}
+        R7_DEL["DELETE<br/><small>known sender</small>"]
+
+        R8{"<b>Rule 8</b><br/>Sender email<br/>pattern?"}
+        R8_DEL["DELETE<br/><small>sender pattern</small>"]
+
+        R9{"<b>Rule 9</b><br/>Subject<br/>pattern?"}
+        R9_DEL["DELETE<br/><small>subject pattern</small>"]
+
+        R10["<b>Rule 10</b><br/>No rule matched<br/>→ LLM_REVIEW"]
+    end
+
+    subgraph ACTIONS["<b>ExecuteAction</b> — inboxItems_ItemAdd"]
+        direction TB
+        ACT_KEEP["✅ <b>KEEP</b><br/>Leave in Inbox"]
+        ACT_DELETE["🗑️ <b>DELETE</b><br/>mail.Delete"]
+        ACT_MOVE["📁 <b>MOVE_II</b><br/>→ Protected folder"]
+        ACT_LLM{"LLM<br/>enabled?"}
+        ACT_REVIEW["📋 <b>LLM_REVIEW</b><br/>→ Review folder"]
+        ACT_LLMCALL["🤖 <b>CallLLM</b><br/>Classify via LLM"]
+    end
+
+    AUTOREPLY{"AutoReplyOnArrival<br/>enabled?"}
+    DRAFT["<b>DraftAutoReply(mail)</b><br/><small>EmailAgent.bas</small><br/>Few-shot reply → Drafts"]
+    LOG["📝 LogMessage<br/><small>action + sender + subject</small>"]
+    DONE(["✔ Processing complete"])
+    style DONE fill:#78909C,color:#fff,stroke:#455A64
+
+    SKIP(["⏭ Ignored<br/><small>not a MailItem</small>"])
+    style SKIP fill:#9E9E9E,color:#fff
+
+    %% Main flow
+    START --> TYPECHECK
+    TYPECHECK -- No --> SKIP
+    TYPECHECK -- Yes --> CLASSIFY
+    CLASSIFY --> R0
+
+    %% Rule chain
+    R0 -- "KEEP" --> R0_KEEP
+    R0 -- "DELETE" --> R0_DEL
+    R0 -- "no rule" --> R05
+
+    R05 -- "DELETE" --> R05_DEL
+    R05 -- "no match" --> R1
+
+    R1 -- Yes --> R1_MOVE
+    R1 -- No --> R2
+
+    R2 -- Yes --> R2_KEEP
+    R2 -- No --> R3
+
+    R3 -- Yes --> R3_KEEP
+    R3 -- No --> R4
+
+    R4 -- Yes --> R4_KEEP
+    R4 -- No --> R5
+
+    R5 -- Yes --> R5_KEEP
+    R5 -- No --> R6
+
+    R6 -- Yes --> R6_KEEP
+    R6 -- No --> R7
+
+    R7 -- Yes --> R7_DEL
+    R7 -- No --> R8
+
+    R8 -- Yes --> R8_DEL
+    R8 -- No --> R9
+
+    R9 -- Yes --> R9_DEL
+    R9 -- No --> R10
+
+    %% Actions
+    R0_KEEP --> ACT_KEEP
+    R2_KEEP --> ACT_KEEP
+    R3_KEEP --> ACT_KEEP
+    R4_KEEP --> ACT_KEEP
+    R5_KEEP --> ACT_KEEP
+    R6_KEEP --> ACT_KEEP
+
+    R0_DEL --> ACT_DELETE
+    R05_DEL --> ACT_DELETE
+    R7_DEL --> ACT_DELETE
+    R8_DEL --> ACT_DELETE
+    R9_DEL --> ACT_DELETE
+
+    R1_MOVE --> ACT_MOVE
+
+    R10 --> ACT_LLM
+    ACT_LLM -- Yes --> ACT_LLMCALL
+    ACT_LLM -- No --> ACT_REVIEW
+    ACT_LLMCALL --> ACT_REVIEW
+
+    %% Post-action
+    ACT_KEEP --> AUTOREPLY
+    AUTOREPLY -- Yes --> DRAFT
+    AUTOREPLY -- No --> LOG
+    DRAFT --> LOG
+
+    ACT_DELETE --> LOG
+    ACT_MOVE --> LOG
+    ACT_REVIEW --> LOG
+
+    LOG --> DONE
+
+    %% Styling
+    classDef keepDecision fill:#C8E6C9,stroke:#388E3C,color:#1B5E20
+    classDef deleteDecision fill:#FFCDD2,stroke:#D32F2F,color:#B71C1C
+    classDef moveDecision fill:#BBDEFB,stroke:#1976D2,color:#0D47A1
+    classDef reviewDecision fill:#FFF9C4,stroke:#F9A825,color:#F57F17
+    classDef ruleCheck fill:#F3E5F5,stroke:#8E24AA,color:#4A148C
+
+    class R0_KEEP,R2_KEEP,R3_KEEP,R4_KEEP,R5_KEEP,R6_KEEP,ACT_KEEP keepDecision
+    class R0_DEL,R05_DEL,R7_DEL,R8_DEL,R9_DEL,ACT_DELETE deleteDecision
+    class R1_MOVE,ACT_MOVE moveDecision
+    class R10,ACT_REVIEW,ACT_LLMCALL reviewDecision
+    class R0,R05,R1,R2,R3,R4,R5,R6,R7,R8,R9 ruleCheck

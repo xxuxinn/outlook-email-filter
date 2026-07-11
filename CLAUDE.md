@@ -32,6 +32,8 @@ static/            → SPA (index.html + style.css + app.js)
 VBA side of bridge: `GetCommandsDir()` + `WriteResultFile()` in Utilities.bas,
 `StartCommandPollerStd` / `PollForCommandsTimer` / `StopCommandPollerStd` in Utilities.bas.
 
+Visual diagrams (architecture, classification flow, learning flows, command bridge): see [diagrams/README.md](diagrams/README.md).
+
 ## Two-Layer Configuration
 
 - `DEFAULT_*` constants in `Config.bas` — compile-time fallbacks, never change at runtime
