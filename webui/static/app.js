@@ -1,6 +1,60 @@
 // app.js — Frontend logic for the Outlook Email Agent Web UI
 
 // ---------------------------------------------------------------------------
+// Auth — the server substitutes the real token into the meta tag when it
+// serves index.html. Every API call goes through apiFetch().
+// ---------------------------------------------------------------------------
+const AUTH_TOKEN =
+  document.querySelector('meta[name="auth-token"]')?.content || '';
+
+async function apiFetch(url, opts = {}) {
+  const headers = { ...(opts.headers || {}), 'X-Auth-Token': AUTH_TOKEN };
+  const r = await fetch(url, { ...opts, headers });
+  if (r.status === 401) {
+    showBanner('Authentication failed — reload the page to get a fresh token.');
+    throw new Error('unauthorized');
+  }
+  return r;
+}
+
+const API = {
+  async get(url) {
+    const r = await apiFetch(url);
+    return r.json();
+  },
+  async post(url, body) {
+    const r = await apiFetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body ?? {}),
+    });
+    return r.json();
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Warning banner
+// ---------------------------------------------------------------------------
+function showBanner(msg) {
+  const banner = document.getElementById('warning-banner');
+  document.getElementById('warning-banner-text').textContent = msg;
+  banner.classList.remove('hidden');
+}
+
+function hideBanner() {
+  document.getElementById('warning-banner').classList.add('hidden');
+}
+
+async function bridgeIsHealthy() {
+  try {
+    const h = await API.get('/api/bridge/health');
+    return h.poller_responsive !== false;
+  } catch (e) {
+    return true; // can't tell — don't block the user
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Settings options — keys with a small set of valid values get dropdowns
 // ---------------------------------------------------------------------------
 const SETTINGS_OPTIONS = {
@@ -14,21 +68,7 @@ const SETTINGS_OPTIONS = {
   'Agent.EnableAutoReply':        ['True','False'],
   'Agent.AutoReplyOnArrival':     ['True','False'],
   'Agent.ScanSentItems':          ['True','False'],
-};
-
-const API = {
-  async get(url) {
-    const r = await fetch(url);
-    return r.json();
-  },
-  async post(url, body) {
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    return r.json();
-  },
+  'Sync.EnableCloudSync':         ['True','False'],
 };
 
 // ---------------------------------------------------------------------------
@@ -52,11 +92,18 @@ function initTabs() {
 async function loadStatus() {
   try {
     const s = await API.get('/api/status');
+    const digest = s.latest_digest ? ` | digest:${s.latest_digest}` : '';
     document.getElementById('version-info').textContent =
-      `v${s.version} | ${s.llm_provider} | senders:${s.learned_senders} subjects:${s.learned_subjects}`;
+      `v${s.version} | ${s.llm_provider} | senders:${s.learned_senders} subjects:${s.learned_subjects}${digest}`;
     const badge = document.getElementById('status-badge');
     badge.textContent = s.llm_enabled === 'True' ? 'LLM on' : 'LLM off';
     badge.className = 'status-badge ' + (s.llm_enabled === 'True' ? 'ok' : 'err');
+    const bridgeBadge = document.getElementById('bridge-badge');
+    bridgeBadge.textContent = s.bridge_ok ? 'bridge ok' : 'bridge stale';
+    bridgeBadge.className = 'status-badge ' + (s.bridge_ok ? 'ok' : 'err');
+    if (!s.bridge_ok) {
+      showBanner('Outlook poller not responding — command files are sitting unconsumed. Is Outlook running?');
+    }
   } catch (e) {
     document.getElementById('status-badge').textContent = 'offline';
     document.getElementById('status-badge').className = 'status-badge err';
@@ -84,9 +131,9 @@ async function loadSettings() {
   for (const [section, keys] of Object.entries(settings)) {
     const card = document.createElement('div');
     card.className = 'card';
-    card.innerHTML = `<h3>${section}</h3><div class="settings-grid" id="section-${section}"></div>
+    card.innerHTML = `<h3>${escHtml(section)}</h3><div class="settings-grid" id="section-${escHtml(section)}"></div>
       <div class="flex-row mt-8">
-        <button class="btn success sm" onclick="saveSection('${section}')">Save ${section}</button>
+        <button class="btn success sm" onclick="saveSection('${escHtml(section)}')">Save ${escHtml(section)}</button>
       </div>`;
     container.appendChild(card);
 
@@ -116,7 +163,7 @@ async function loadSettings() {
       const field = document.createElement('div');
       field.className = 'field';
       field.style.gridColumn = isLong ? '1 / -1' : '';
-      field.innerHTML = `<label>${key}</label>${inputEl}`;
+      field.innerHTML = `<label>${escHtml(key)}</label>${inputEl}`;
       grid.appendChild(field);
     }
   }
@@ -145,13 +192,21 @@ async function saveSection(section) {
       values[key] = el.value;
     }
   });
-  await API.post('/api/settings/section', { section, values });
+  const r = await API.post('/api/settings/section', { section, values });
+  if (r.ok === false) {
+    showToast(`Save failed: ${r.error || 'unknown error'}`, true);
+    return;
+  }
   showToast(`${section} saved`);
   loadStatus();
 }
 
 async function reloadSettings() {
-  await API.post('/api/settings/reload', {});
+  const r = await API.post('/api/settings/reload', {});
+  if (r.ok === false) {
+    showToast(`Reload failed: ${r.error || 'unknown error'}`, true);
+    return;
+  }
   showToast('Reload command sent to Outlook');
 }
 
@@ -177,8 +232,8 @@ async function loadLearnedRules() {
     ? '<tr><td colspan="3" class="text-dim">No rules yet</td></tr>'
     : senders.map(r => `<tr>
         <td><code>${escHtml(r.email)}</code></td>
-        <td><span class="badge ${r.action === 'KEEP' ? 'keep' : 'delete'}">${r.action}</span></td>
-        <td class="text-dim">${r.timestamp}</td>
+        <td><span class="badge ${r.action === 'KEEP' ? 'keep' : 'delete'}">${escHtml(r.action)}</span></td>
+        <td class="text-dim">${escHtml(r.timestamp)}</td>
       </tr>`).join('');
 
   // Subjects table
@@ -187,8 +242,8 @@ async function loadLearnedRules() {
     ? '<tr><td colspan="3" class="text-dim">No rules yet</td></tr>'
     : subjects.map(r => `<tr>
         <td><code>${escHtml(r.subject)}</code></td>
-        <td><span class="badge delete">${r.action}</span></td>
-        <td class="text-dim">${r.timestamp}</td>
+        <td><span class="badge delete">${escHtml(r.action)}</span></td>
+        <td class="text-dim">${escHtml(r.timestamp)}</td>
       </tr>`).join('');
 
   // Replies table
@@ -199,96 +254,99 @@ async function loadLearnedRules() {
         <td>${escHtml(r.subject)}</td>
         <td>${escHtml(r.from)}</td>
         <td class="text-dim">${escHtml(r.reply_snippet.substring(0, 80))}…</td>
-        <td class="text-dim">${r.timestamp}</td>
+        <td class="text-dim">${escHtml(r.timestamp)}</td>
       </tr>`).join('');
 }
 
 // ---------------------------------------------------------------------------
-// Macros tab
+// Macros tab — the runnable list comes from the server manifest
+// (GET /api/macros). Local-only hints stay client-side because these two
+// subs live in ThisOutlookSession and cannot be run through the bridge.
 // ---------------------------------------------------------------------------
-const MACROS = [
-  // Version
-  { name: 'ShowVersionInfo', desc: 'Show version and status', cat: 'Version' },
-  // Filtering
-  { name: 'FilterExistingDryRun', desc: 'Preview filter decisions (no changes)', cat: 'Filtering' },
-  { name: 'FilterExistingEmails', desc: 'Filter all Inbox emails', cat: 'Filtering' },
-  { name: 'FilterAllFolders', desc: 'Filter Inbox + Other + PST archives', cat: 'Filtering' },
-  { name: 'FilterSelectedEmail', desc: 'Test classification on one selected email', cat: 'Filtering' },
-  { name: 'FilterSelectedEmails', desc: 'Filter selected email(s) with confirmation', cat: 'Filtering' },
-  { name: 'FilterCurrentFolder', desc: 'Filter current folder with confirmation', cat: 'Filtering' },
-  { name: 'FilterLastNDays', desc: 'Filter last N days', cat: 'Filtering',
-    param: { key: 'days', prompt: 'Number of days to filter (e.g. 7):', default: '7' } },
-  { name: 'GenerateClassificationReport', desc: 'Count classifications without acting', cat: 'Filtering' },
-  { name: 'BulkDeleteBySender', desc: 'Delete all from matching senders', cat: 'Filtering',
-    param: { key: 'pattern', prompt: 'Sender pattern to match (e.g. "noreply"):', default: '' } },
-  { name: 'MoveProtectedSources', desc: 'Move protected domain emails to Protected folder', cat: 'Filtering' },
-  // Agent Tools
-  { name: 'GenerateAddressingPatterns', desc: 'LLM-generate name/greeting patterns', cat: 'Agent Tools' },
-  { name: 'ScanSentForReplyPatterns', desc: 'Learn reply style from Sent Items', cat: 'Agent Tools' },
-  { name: 'DraftReplyForSelected', desc: 'Draft few-shot replies for selected email(s)', cat: 'Agent Tools' },
-  { name: 'ShowLearnedRepliesSummary', desc: 'Show learned reply pair count', cat: 'Agent Tools' },
-  // LLM Tools
-  { name: 'SummarizeSelectedEmail', desc: 'Summarize selected email using LLM', cat: 'LLM Tools' },
-  { name: 'DraftReplyToSelected', desc: 'Draft reply to selected email (few-shot)', cat: 'LLM Tools' },
-  // Learned Rules
-  { name: 'ShowLearnedSenders', desc: 'Show learned sender rule count', cat: 'Learned Rules' },
-  { name: 'ShowLearnedSendersList', desc: 'Dump sender rules to Immediate Window', cat: 'Learned Rules' },
-  { name: 'ReloadLearnedSenders', desc: 'Force reload learned rules from file', cat: 'Learned Rules' },
-  { name: 'CleanLearnedSendersFile', desc: 'Remove duplicate sender entries', cat: 'Learned Rules' },
-  { name: 'ImportExistingLearnedFolders', desc: 'Bulk import from LearnKeep/LearnDelete', cat: 'Learned Rules' },
-  { name: 'ShowLearnedSubjectsList', desc: 'Dump subject rules to Immediate Window', cat: 'Learned Rules' },
-  { name: 'CleanLearnedSubjectsFile', desc: 'Remove duplicate subject entries', cat: 'Learned Rules' },
-  { name: 'ImportExistingLearnedSubjectFolder', desc: 'Bulk import from LearnSubjectDelete', cat: 'Learned Rules' },
-  // Server Rules
-  { name: 'ImportServerRules', desc: 'Import server rules as learned DELETE rules', cat: 'Server Rules' },
-  { name: 'ExportLearnedRulesToServer', desc: 'Push DELETE rules to Exchange server', cat: 'Server Rules' },
-  // Undo / Recovery
-  { name: 'RestoreFromReview', desc: 'Move Review folder emails back to Inbox', cat: 'Undo / Recovery' },
-  { name: 'RestoreDeletedKeepEmails', desc: 'Rescue wrongly deleted KEEP emails', cat: 'Undo / Recovery' },
-  // Migration & System
-  { name: 'DetectAndMigrateOldFolders', desc: 'Rename v1.x folders to v2.0 names', cat: 'Migration & System' },
-  { name: 'ReinitializeFilter', desc: 'Restart event handlers', cat: 'Migration & System' },
-  { name: 'EnableRealTimeFilter', desc: 'Turn on automatic filtering (run in Immediate Window: ThisOutlookSession.EnableRealTimeFilter)', cat: 'Migration & System', localOnly: true },
-  { name: 'DisableRealTimeFilter', desc: 'Turn off automatic filtering (run in Immediate Window: ThisOutlookSession.DisableRealTimeFilter)', cat: 'Migration & System', localOnly: true },
+const LOCAL_ONLY_MACROS = [
+  { name: 'EnableRealTimeFilter',
+    description: 'Turn on automatic filtering (run in Immediate Window: ThisOutlookSession.EnableRealTimeFilter)',
+    category: 'Migration & System' },
+  { name: 'DisableRealTimeFilter',
+    description: 'Turn off automatic filtering (run in Immediate Window: ThisOutlookSession.DisableRealTimeFilter)',
+    category: 'Migration & System' },
 ];
 
-function initMacros() {
+const ARG_DEFAULTS = { days: '7', pattern: '' };
+
+let MACRO_LIST = [];
+
+async function initMacros() {
   const grid = document.getElementById('macro-grid');
+  try {
+    const r = await API.get('/api/macros');
+    MACRO_LIST = r.macros || [];
+  } catch (e) {
+    grid.innerHTML = '<span class="text-dim">Could not load macro list from the server.</span>';
+    return;
+  }
+
   let html = '';
   let currentCat = '';
-  for (const m of MACROS) {
-    if (m.cat !== currentCat) {
-      currentCat = m.cat;
+  const renderCat = (cat) => {
+    if (cat !== currentCat) {
+      currentCat = cat;
       html += `<h4 class="macro-category">${escHtml(currentCat)}</h4>`;
     }
-    if (m.localOnly) {
-      html += `<button class="macro-btn macro-local" onclick="showLocalOnlyInfo('${m.name}')">
-        <div class="macro-name">${m.name} ⓘ</div>
-        <div class="macro-desc">${m.desc}</div>
-      </button>`;
-    } else {
-      html += `<button class="macro-btn" onclick="runMacro('${m.name}')">
-        <div class="macro-name">${m.name}</div>
-        <div class="macro-desc">${m.desc}</div>
-      </button>`;
+  };
+  for (const m of MACRO_LIST) {
+    renderCat(m.category);
+    const destructive = m.destructive ? ' macro-destructive' : '';
+    html += `<button class="macro-btn${destructive}" onclick="runMacro('${escHtml(m.name)}')">
+      <div class="macro-name">${escHtml(m.name)}${m.destructive ? ' ⚠' : ''}</div>
+      <div class="macro-desc">${escHtml(m.description)}</div>
+    </button>`;
+    if (m.name === 'ReinitializeFilter') {
+      for (const lm of LOCAL_ONLY_MACROS) {
+        html += `<button class="macro-btn macro-local" onclick="showLocalOnlyInfo('${escHtml(lm.name)}')">
+          <div class="macro-name">${escHtml(lm.name)} ⓘ</div>
+          <div class="macro-desc">${escHtml(lm.description)}</div>
+        </button>`;
+      }
     }
   }
   grid.innerHTML = html;
 }
 
 async function runMacro(macroName) {
-  // Check if macro needs a parameter
-  const macro = MACROS.find(m => m.name === macroName);
-  let args = {};
-  if (macro && macro.param) {
-    const val = window.prompt(macro.param.prompt, macro.param.default);
+  const macro = MACRO_LIST.find(m => m.name === macroName);
+  if (!macro) {
+    setMacroOutput(`✗ Unknown macro: ${macroName}`, 'err');
+    return;
+  }
+
+  if (macro.destructive &&
+      !window.confirm(`"${macroName}" moves or deletes emails / rewrites rules.\n\nRun it?`)) {
+    return;
+  }
+
+  const args = {};
+  for (const spec of macro.args || []) {
+    const promptText = `${spec.name} (${spec.type}${spec.required ? ', required' : ''}):`;
+    const val = window.prompt(promptText, ARG_DEFAULTS[spec.name] ?? '');
     if (val === null) return; // cancelled
-    args[macro.param.key] = val;
+    args[spec.name] = val;
+  }
+
+  // Fast-fail when the Outlook poller is not consuming command files.
+  if (!(await bridgeIsHealthy())) {
+    showBanner('Outlook poller not responding — command not sent. Is Outlook running with the VBA project loaded?');
+    setMacroOutput('⚠ Outlook poller not responding (stale command files detected).\nCommand was NOT sent. Start Outlook (or run ThisOutlookSession.ReinitializeFilter) and try again.', 'warn');
+    return;
   }
 
   setMacroOutput(`Sending command: ${macroName}...`, 'dim');
   try {
     const r = await API.post('/api/command', { macro: macroName, args });
+    if (r.error) {
+      setMacroOutput(`✗ Rejected: ${r.error}`, 'err');
+      return;
+    }
     const cmdId = r.command_id;
     setMacroOutput(`Command sent (ID: ${cmdId})\nWaiting for Outlook response...`, 'dim');
     pollResult(cmdId, (result) => {
@@ -344,13 +402,182 @@ function pollResult(cmdId, callback, attempts = 0) {
     if (el) el.textContent = `Waiting for Outlook response... (${Math.round(attempts / 2)}s elapsed, command ID: ${cmdId})`;
   }
   setTimeout(async () => {
-    const r = await API.get(`/api/command/${cmdId}/result`);
-    if (r.status === 'pending') {
-      pollResult(cmdId, callback, attempts + 1);
-    } else {
-      callback(r);
+    try {
+      const r = await API.get(`/api/command/${cmdId}/result`);
+      if (r.status === 'pending') {
+        pollResult(cmdId, callback, attempts + 1);
+      } else {
+        callback(r);
+      }
+    } catch (e) {
+      callback({ status: 'error', output: e.message });
     }
   }, 500);
+}
+
+// ---------------------------------------------------------------------------
+// Digest tab
+// ---------------------------------------------------------------------------
+async function loadDigest() {
+  const content = document.getElementById('digest-content');
+  const title = document.getElementById('digest-title');
+  try {
+    const r = await API.get('/api/digest');
+    if (r.ok === false || !r.content) {
+      title.textContent = 'Daily Digest';
+      content.innerHTML = '<div class="text-dim">No digest yet. Click "Generate Digest Now" (Outlook must be running).</div>';
+      return;
+    }
+    title.textContent = `Daily Digest — ${r.date}`;
+    content.innerHTML = markdownToHtml(r.content);
+  } catch (e) {
+    content.innerHTML = '<div class="text-dim">Could not load digest.</div>';
+  }
+}
+
+async function generateDigest() {
+  const status = document.getElementById('digest-status');
+  if (!(await bridgeIsHealthy())) {
+    showBanner('Outlook poller not responding — digest command not sent.');
+    status.textContent = 'Poller not responding.';
+    return;
+  }
+  status.textContent = 'Generating…';
+  try {
+    const r = await API.post('/api/digest/generate', {});
+    if (r.ok === false || r.error) {
+      status.textContent = `Failed: ${r.error || 'unknown error'}`;
+      return;
+    }
+    pollResult(r.command_id, (result) => {
+      if (result.status === 'ok') {
+        status.textContent = result.output || 'Digest generated.';
+        loadDigest();
+        loadStatus();
+      } else {
+        status.textContent = `${result.status}: ${result.output || ''}`;
+      }
+    });
+  } catch (e) {
+    status.textContent = `Failed: ${e.message}`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Proposals tab
+// ---------------------------------------------------------------------------
+async function loadProposals() {
+  const body = document.getElementById('proposals-table-body');
+  let proposals;
+  try {
+    proposals = await API.get('/api/proposals');
+  } catch (e) {
+    body.innerHTML = '<tr><td colspan="7" class="text-dim">Could not load proposals.</td></tr>';
+    return;
+  }
+  if (!proposals || proposals.length === 0) {
+    body.innerHTML = '<tr><td colspan="7" class="text-dim">No proposals yet. Click "Generate Proposals" (requires LLM + decision history).</td></tr>';
+    return;
+  }
+  body.innerHTML = proposals.slice().reverse().map(p => {
+    const statusCls = p.status === 'PENDING' ? 'warn' : (p.status === 'APPROVED' ? 'keep' : 'delete');
+    const buttons = p.status === 'PENDING'
+      ? `<button class="btn success sm" onclick="approveProposal('${escHtml(p.id)}')">Approve</button>
+         <button class="btn sm" onclick="rejectProposal('${escHtml(p.id)}')">Reject</button>`
+      : '';
+    return `<tr>
+      <td>${escHtml(p.type)}</td>
+      <td><code>${escHtml(p.value)}</code></td>
+      <td><span class="badge ${p.action === 'KEEP' ? 'keep' : 'delete'}">${escHtml(p.action)}</span></td>
+      <td class="text-dim">${escHtml(p.reason)}</td>
+      <td><span class="badge ${statusCls}">${escHtml(p.status)}</span></td>
+      <td class="text-dim">${escHtml(p.timestamp)}</td>
+      <td class="proposal-actions">${buttons}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function approveProposal(id) {
+  try {
+    const r = await API.post(`/api/proposals/${id}/approve`, {});
+    if (r.ok === false) {
+      showToast(`Approve failed: ${r.error || 'unknown error'}`, true);
+    } else {
+      const note = r.reload_error ? ` (reload not sent: ${r.reload_error})` : ` — ${r.reload_macro} sent to Outlook`;
+      showToast(`Rule approved${note}`);
+    }
+  } catch (e) {
+    showToast(`Approve failed: ${e.message}`, true);
+  }
+  loadProposals();
+  loadStatus();
+}
+
+async function rejectProposal(id) {
+  try {
+    const r = await API.post(`/api/proposals/${id}/reject`, {});
+    if (r.ok === false) {
+      showToast(`Reject failed: ${r.error || 'unknown error'}`, true);
+    } else {
+      showToast('Proposal rejected');
+    }
+  } catch (e) {
+    showToast(`Reject failed: ${e.message}`, true);
+  }
+  loadProposals();
+}
+
+async function generateProposals() {
+  const status = document.getElementById('proposals-status');
+  if (!(await bridgeIsHealthy())) {
+    showBanner('Outlook poller not responding — proposals command not sent.');
+    status.textContent = 'Poller not responding.';
+    return;
+  }
+  status.textContent = 'Mining decision log…';
+  try {
+    const r = await API.post('/api/proposals/generate', {});
+    if (r.ok === false || r.error) {
+      status.textContent = `Failed: ${r.error || 'unknown error'}`;
+      return;
+    }
+    pollResult(r.command_id, (result) => {
+      if (result.status === 'ok') {
+        status.textContent = result.output || 'Done.';
+        loadProposals();
+      } else {
+        status.textContent = `${result.status}: ${result.output || ''}`;
+      }
+    });
+  } catch (e) {
+    status.textContent = `Failed: ${e.message}`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Decisions tab
+// ---------------------------------------------------------------------------
+async function loadDecisions() {
+  const body = document.getElementById('decisions-table-body');
+  let decisions;
+  try {
+    decisions = await API.get('/api/decisions?n=100');
+  } catch (e) {
+    body.innerHTML = '<tr><td colspan="6" class="text-dim">Could not load decision log.</td></tr>';
+    return;
+  }
+  if (!decisions || decisions.length === 0) {
+    body.innerHTML = '<tr><td colspan="6" class="text-dim">No decisions logged yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = decisions.slice().reverse().map(d => `<tr>
+    <td class="text-dim">${escHtml(d.timestamp)}</td>
+    <td><code>${escHtml(d.sender)}</code></td>
+    <td>${escHtml(d.subject)}</td>
+    <td class="text-dim">${escHtml(d.source)}</td>
+    <td><span class="badge ${d.action === 'KEEP' ? 'keep' : (d.action === 'DELETE' ? 'delete' : 'warn')}">${escHtml(d.action)}</span></td>
+    <td class="text-dim">${escHtml(d.confidence)}</td>
+  </tr>`).join('');
 }
 
 // ---------------------------------------------------------------------------
@@ -393,13 +620,21 @@ async function loadLogs() {
 }
 
 async function clearErrorLog() {
-  await API.post('/api/errors/clear', {});
+  const r = await API.post('/api/errors/clear', {});
+  if (r.ok === false) {
+    showToast(`Could not clear: ${r.error || 'unknown error'}`, true);
+    return;
+  }
   document.getElementById('logs-container').innerHTML = '<div class="text-dim">No errors logged.</div>';
   showToast('Error log cleared');
 }
 
 async function clearLLMDebugLog() {
-  await API.post('/api/llm-debug-log/clear', {});
+  const r = await API.post('/api/llm-debug-log/clear', {});
+  if (r.ok === false) {
+    showToast(`Could not clear: ${r.error || 'unknown error'}`, true);
+    return;
+  }
   document.getElementById('llm-debug-container').innerHTML = '<div class="text-dim">No LLM debug entries. Set LogLevel=DEBUG in settings to enable.</div>';
   showToast('LLM debug log cleared');
 }
@@ -427,22 +662,28 @@ async function sendChat() {
 
   addChatBubble('user', escHtml(message));
 
-  const r = await API.post('/api/chat', { message });
+  let r;
+  try {
+    r = await API.post('/api/chat', { message });
+  } catch (e) {
+    addChatBubble('agent', `✗ ${escHtml(e.message)}`);
+    return;
+  }
 
-  if (r.type === 'help' || r.type === 'unknown' || r.type === 'setting') {
+  if (r.type === 'help' || r.type === 'unknown' || r.type === 'setting' || r.type === 'error') {
     addChatBubble('agent', markdownToHtml(r.output || r.label));
     return;
   }
 
   if (r.type === 'api') {
-    addChatBubble('agent', r.label);
+    addChatBubble('agent', escHtml(r.label));
     const data = await API.get(r.endpoint);
     addChatBubble('agent', `<pre>${escHtml(JSON.stringify(data, null, 2).substring(0, 2000))}</pre>`);
     return;
   }
 
   if (r.type === 'macro') {
-    const pending = addChatBubble('agent', `<span class="spinner">↻</span> ${r.label}`);
+    const pending = addChatBubble('agent', `<span class="spinner">↻</span> ${escHtml(r.label)}`);
     pollResult(r.command_id, (result) => {
       if (result.status === 'ok') {
         pending.innerHTML = `✓ ${escHtml(result.output || 'Done')}`;
@@ -455,7 +696,7 @@ async function sendChat() {
     return;
   }
 
-  addChatBubble('agent', r.output || r.label || 'Done.');
+  addChatBubble('agent', escHtml(r.output || r.label || 'Done.'));
 }
 
 function addChatBubble(role, html) {
@@ -477,24 +718,49 @@ function escHtml(str) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }
 
-function escAttr(str) {
-  return String(str ?? '').replace(/'/g, "\\'").replace(/"/g, '\\"');
-}
-
+// Minimal markdown renderer. Escapes FIRST, then applies formatting on the
+// escaped text — no raw HTML from the input ever reaches the DOM.
+// Supports: # / ## / ### headings, "- " lists, **bold**, `code`.
 function markdownToHtml(text) {
-  // Minimal: bold **text**, code `text`, newlines
-  return escHtml(text)
+  const inline = (s) => s
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/`(.+?)`/g, '<code>$1</code>')
-    .replace(/\n/g, '<br>');
+    .replace(/`(.+?)`/g, '<code>$1</code>');
+
+  const lines = escHtml(text).split('\n');
+  const out = [];
+  let inList = false;
+  const closeList = () => {
+    if (inList) { out.push('</ul>'); inList = false; }
+  };
+
+  for (const line of lines) {
+    const li = line.match(/^\s*-\s+(.*)$/);
+    if (li) {
+      if (!inList) { out.push('<ul>'); inList = true; }
+      out.push(`<li>${inline(li[1])}</li>`);
+      continue;
+    }
+    closeList();
+    const heading = line.match(/^(#{1,3})\s+(.*)$/);
+    if (heading) {
+      const level = heading[1].length + 1; // # → h2, ## → h3, ### → h4
+      out.push(`<h${level} class="md-h">${inline(heading[2])}</h${level}>`);
+      continue;
+    }
+    out.push(`${inline(line)}<br>`);
+  }
+  closeList();
+  return out.join('');
 }
 
-function showToast(msg) {
+function showToast(msg, isError = false) {
   const t = document.createElement('div');
-  t.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#1a3a2e;color:#64ffda;border:1px solid #64ffda;padding:10px 16px;border-radius:6px;font-size:13px;z-index:9999';
+  const color = isError ? '#ef4444' : '#64ffda';
+  const bg = isError ? '#3a1a1a' : '#1a3a2e';
+  t.style.cssText = `position:fixed;bottom:20px;right:20px;background:${bg};color:${color};border:1px solid ${color};padding:10px 16px;border-radius:6px;font-size:13px;z-index:9999`;
   t.textContent = msg;
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), 2500);
+  setTimeout(() => t.remove(), isError ? 5000 : 2500);
 }
 
 // ---------------------------------------------------------------------------
@@ -512,6 +778,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const tab = btn.dataset.tab;
       if (tab === 'settings') loadSettings();
       else if (tab === 'rules') loadLearnedRules();
+      else if (tab === 'digest') loadDigest();
+      else if (tab === 'proposals') loadProposals();
+      else if (tab === 'decisions') loadDecisions();
       else if (tab === 'logs') loadLogs();
     });
   });

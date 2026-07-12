@@ -20,7 +20,8 @@ Option Explicit
 '-------------------------------------------------------------------------------
 
 ' LLM-generates comprehensive personal addressing patterns and saves them to
-' settings.ini. Run this once when setting up for a new professor.
+' settings.ini. Interactive version: prompts for inputs and confirms before
+' overwriting existing patterns. Run once when setting up for a new professor.
 Public Sub GenerateAddressingPatterns()
     On Error GoTo PROC_ERR
     PushCallStack "EmailAgent.GenerateAddressingPatterns"
@@ -43,18 +44,98 @@ Public Sub GenerateAddressingPatterns()
     Dim role As String
     role = Trim(InputBox("Your role/position (e.g., Head, Director, Dean) - leave blank to skip:", "Addressing Patterns - Step 3 of 3"))
 
-    ' Build LLM prompt
-    Dim roleHint As String
-    roleHint = ""
-    If Len(role) > 0 Then
-        roleHint = " The person also has the role: " & role & "."
+    Dim namePatterns As String
+    Dim greetingPatterns As String
+    Dim genError As String
+    genError = GeneratePatternsViaLLM(fullName, title, role, namePatterns, greetingPatterns)
+
+    If Len(genError) > 0 Then
+        MsgBox genError, vbExclamation, "Generate Patterns"
+        GoTo PROC_EXIT
     End If
 
-    Dim titleHint As String
-    titleHint = ""
-    If Len(title) > 0 Then
-        titleHint = " Their title is: " & title & "."
+    ' Show preview and ask for confirmation
+    Dim preview As String
+    preview = "Generated addressing patterns for: " & fullName & vbCrLf & vbCrLf & _
+              "NAME_PATTERNS (" & CountCommas(namePatterns) + 1 & " patterns):" & vbCrLf & _
+              WrapText(namePatterns, 70) & vbCrLf & vbCrLf & _
+              "GREETING_PATTERNS (" & CountCommas(greetingPatterns) + 1 & " patterns):" & vbCrLf & _
+              WrapText(greetingPatterns, 70) & vbCrLf & vbCrLf & _
+              "Save these to settings.ini and reload? (This will replace existing patterns.)"
+
+    If MsgBox(preview, vbYesNo + vbQuestion, "Confirm Addressing Patterns") = vbNo Then
+        GoTo PROC_EXIT
     End If
+
+    SavePatternsToSettings namePatterns, greetingPatterns
+
+    MsgBox "Addressing patterns saved and loaded." & vbCrLf & vbCrLf & _
+           "The filter will now recognise emails addressed to """ & fullName & """.", _
+           vbInformation, "Generate Patterns"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "EmailAgent", "GenerateAddressingPatterns", Err.Number, Err.Description
+    MsgBox "Error generating patterns: " & Err.Description, vbCritical, "Generate Patterns"
+    Resume PROC_EXIT
+End Sub
+
+' Bridge variant: takes name/title/role as arguments (no InputBox, no confirm
+' dialog — the Web UI supplies the inputs). Returns a summary or "ERROR: ...".
+Public Function GenerateAddressingPatternsStd(ByVal fullName As String, _
+                                              ByVal title As String, _
+                                              ByVal role As String) As String
+    On Error GoTo PROC_ERR
+    PushCallStack "EmailAgent.GenerateAddressingPatternsStd"
+
+    If Not RuntimeUseLLM Then
+        GenerateAddressingPatternsStd = "ERROR: LLM must be enabled (UseLLMAPI=True) to generate addressing patterns."
+        GoTo PROC_EXIT
+    End If
+
+    If Len(Trim(fullName)) = 0 Then
+        GenerateAddressingPatternsStd = "ERROR: name argument is required."
+        GoTo PROC_EXIT
+    End If
+
+    Dim namePatterns As String
+    Dim greetingPatterns As String
+    Dim genError As String
+    genError = GeneratePatternsViaLLM(Trim(fullName), Trim(title), Trim(role), namePatterns, greetingPatterns)
+
+    If Len(genError) > 0 Then
+        GenerateAddressingPatternsStd = "ERROR: " & genError
+        GoTo PROC_EXIT
+    End If
+
+    SavePatternsToSettings namePatterns, greetingPatterns
+
+    GenerateAddressingPatternsStd = "Addressing patterns saved and loaded for """ & fullName & """." & vbCrLf & _
+        "NAME_PATTERNS: " & namePatterns & vbCrLf & _
+        "GREETING_PATTERNS: " & greetingPatterns
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "EmailAgent", "GenerateAddressingPatternsStd", Err.Number, Err.Description
+    GenerateAddressingPatternsStd = "ERROR: pattern generation failed: " & Err.Description
+    Resume PROC_EXIT
+End Function
+
+' Shared LLM call + parse for both pattern-generation entry points.
+' Returns "" on success (out-params filled) or an error message.
+Private Function GeneratePatternsViaLLM(ByVal fullName As String, ByVal title As String, _
+                                        ByVal role As String, _
+                                        ByRef namePatterns As String, _
+                                        ByRef greetingPatterns As String) As String
+    Dim roleHint As String
+    If Len(role) > 0 Then roleHint = " The person also has the role: " & role & "."
+
+    Dim titleHint As String
+    If Len(title) > 0 Then titleHint = " Their title is: " & title & "."
 
     Dim userPrompt As String
     userPrompt = "Given the name """ & fullName & """" & titleHint & roleHint & _
@@ -76,58 +157,30 @@ Public Sub GenerateAddressingPatterns()
     llmResponse = CallLLM(userPrompt, systemPrompt, 400)
 
     If Len(llmResponse) = 0 Then
-        MsgBox "LLM returned no response. Check your API configuration.", vbExclamation, "Generate Patterns"
-        GoTo PROC_EXIT
+        GeneratePatternsViaLLM = "LLM returned no response. Check your API configuration."
+        Exit Function
     End If
-
-    ' Parse the two comma-separated lists
-    Dim namePatterns As String
-    Dim greetingPatterns As String
 
     namePatterns = ExtractPatternList(llmResponse, "NAME_PATTERNS:")
     greetingPatterns = ExtractPatternList(llmResponse, "GREETING_PATTERNS:")
 
     If Len(namePatterns) = 0 And Len(greetingPatterns) = 0 Then
-        MsgBox "Could not parse LLM response. Raw response:" & vbCrLf & vbCrLf & Left(llmResponse, 800), _
-               vbExclamation, "Generate Patterns"
-        GoTo PROC_EXIT
+        GeneratePatternsViaLLM = "Could not parse LLM response. Raw response: " & Left(llmResponse, 400)
+        Exit Function
     End If
 
-    ' Show preview and ask for confirmation
-    Dim preview As String
-    preview = "Generated addressing patterns for: " & fullName & vbCrLf & vbCrLf & _
-              "NAME_PATTERNS (" & CountCommas(namePatterns) + 1 & " patterns):" & vbCrLf & _
-              WrapText(namePatterns, 70) & vbCrLf & vbCrLf & _
-              "GREETING_PATTERNS (" & CountCommas(greetingPatterns) + 1 & " patterns):" & vbCrLf & _
-              WrapText(greetingPatterns, 70) & vbCrLf & vbCrLf & _
-              "Save these to settings.ini and reload? (This will replace existing patterns.)"
+    GeneratePatternsViaLLM = ""
+End Function
 
-    If MsgBox(preview, vbYesNo + vbQuestion, "Confirm Addressing Patterns") = vbNo Then
-        GoTo PROC_EXIT
-    End If
-
-    ' Write to settings.ini
+' Persist generated patterns and reload settings so they take effect immediately
+Private Sub SavePatternsToSettings(ByVal namePatterns As String, ByVal greetingPatterns As String)
     If Len(namePatterns) > 0 Then
         WriteINISetting "Patterns", "NamePatterns", namePatterns
     End If
     If Len(greetingPatterns) > 0 Then
         WriteINISetting "Patterns", "GreetingPatterns", greetingPatterns
     End If
-
-    ' Reload settings so new patterns take effect immediately
     LoadAllSettings
-
-    MsgBox "Addressing patterns saved and loaded." & vbCrLf & vbCrLf & _
-           "The filter will now recognise emails addressed to """ & fullName & """.", _
-           vbInformation, "Generate Patterns"
-
-PROC_EXIT:
-    PopCallStack
-    Exit Sub
-PROC_ERR:
-    LogError "EmailAgent", "GenerateAddressingPatterns", Err.Number, Err.Description
-    MsgBox "Error generating patterns: " & Err.Description, vbCritical, "Generate Patterns"
-    Resume PROC_EXIT
 End Sub
 
 ' Extract a comma-separated list from a line like "NAME_PATTERNS: a,b,c"
@@ -320,12 +373,20 @@ End Function
 ' SCAN SENT ITEMS FOR REPLY PATTERNS
 '-------------------------------------------------------------------------------
 
+' Interactive wrapper — shows the scan summary in a MsgBox
+Public Sub ScanSentForReplyPatterns()
+    Dim result As String
+    result = ScanSentForReplyPatternsCore()
+    MsgBox result, IIf(Left(result, 6) = "ERROR:", vbCritical, vbInformation), "Scan Sent Items"
+End Sub
+
 ' Scan Sent Items for reply emails and extract original/reply pairs into
 ' learned_replies.txt. Uses a simple heuristic: sent emails with RE: subjects
 ' where the body contains a "From:" / "Sent:" delimiter.
-Public Sub ScanSentForReplyPatterns()
+' Headless: returns a summary string ("ERROR: ..." on failure).
+Public Function ScanSentForReplyPatternsCore() As String
     On Error GoTo PROC_ERR
-    PushCallStack "EmailAgent.ScanSentForReplyPatterns"
+    PushCallStack "EmailAgent.ScanSentForReplyPatternsCore"
 
     Dim ns As Outlook.NameSpace
     Dim sentFolder As Outlook.Folder
@@ -388,22 +449,23 @@ Public Sub ScanSentForReplyPatterns()
 NextItem:
     Next i
 
+    ' New reply pairs change the replied-to set used for context enrichment
+    If learnedCount > 0 Then InvalidateRepliedToCache
+
     LogMessage "INFO", "ScanSentForReplyPatterns: scanned " & scannedCount & ", learned " & learnedCount & " reply pairs"
 
-    MsgBox "Scan complete." & vbCrLf & vbCrLf & _
-           "Scanned: " & scannedCount & " sent emails" & vbCrLf & _
-           "Learned: " & learnedCount & " reply pairs" & vbCrLf & vbCrLf & _
-           "File: " & GetLearnedRepliesFilePath(), _
-           vbInformation, "Scan Sent Items"
+    ScanSentForReplyPatternsCore = "Scan complete. Scanned: " & scannedCount & " sent emails, learned: " & _
+                                   learnedCount & " reply pairs." & vbCrLf & _
+                                   "File: " & GetLearnedRepliesFilePath()
 
 PROC_EXIT:
     PopCallStack
-    Exit Sub
+    Exit Function
 PROC_ERR:
-    LogError "EmailAgent", "ScanSentForReplyPatterns", Err.Number, Err.Description
-    MsgBox "Error scanning sent items: " & Err.Description, vbCritical, "Scan Sent Items"
+    LogError "EmailAgent", "ScanSentForReplyPatternsCore", Err.Number, Err.Description
+    ScanSentForReplyPatternsCore = "ERROR: Sent Items scan failed: " & Err.Description
     Resume PROC_EXIT
-End Sub
+End Function
 
 ' Check if subject has a reply prefix
 Private Function IsReplySubject(ByVal subject As String) As Boolean
@@ -424,7 +486,9 @@ End Function
 
 ' Extract the user's reply text: everything before the first quoted-message delimiter.
 ' Looks for "From:", "-----Original Message-----", "________________________________" etc.
-Private Function ExtractReplyTextFromBody(ByVal body As String) As String
+' Public: shared with ThisOutlookSession's LearnReply folder watcher (the
+' previous private copies there had drifted from these).
+Public Function ExtractReplyTextFromBody(ByVal body As String) As String
     Dim delimiters(4) As String
     delimiters(0) = vbCrLf & "From:"
     delimiters(1) = vbLf & "From:"
@@ -455,7 +519,8 @@ Private Function ExtractReplyTextFromBody(ByVal body As String) As String
 End Function
 
 ' Extract snippet of original message (text after the first delimiter)
-Private Function ExtractOriginalBodySnippet(ByVal body As String) As String
+' Public: shared with ThisOutlookSession's LearnReply folder watcher.
+Public Function ExtractOriginalBodySnippet(ByVal body As String) As String
     Dim delimiters(4) As String
     delimiters(0) = vbCrLf & "From:"
     delimiters(1) = vbLf & "From:"
@@ -561,50 +626,48 @@ End Sub
 ' LEARNED REPLY MANAGEMENT MACROS
 '-------------------------------------------------------------------------------
 
-' Show count and file path for learned replies
+' Show count and file path for learned replies (interactive wrapper)
 Public Sub ShowLearnedRepliesSummary()
+    MsgBox ShowLearnedRepliesSummaryCore(), vbInformation, "Learned Replies"
+End Sub
+
+' Headless summary of the learned reply corpus (used by the Web UI bridge)
+Public Function ShowLearnedRepliesSummaryCore() As String
     On Error GoTo PROC_ERR
-    PushCallStack "EmailAgent.ShowLearnedRepliesSummary"
+    PushCallStack "EmailAgent.ShowLearnedRepliesSummaryCore"
 
     Dim filePath As String
-    Dim fso As Object
-    Dim ts As Object
     Dim lineCount As Long
-    Dim line As String
+    Dim lines As Variant
+    Dim i As Long
 
     filePath = GetLearnedRepliesFilePath()
 
-    Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim content As String
+    content = ReadTextFileSmart(filePath)
 
-    If Not fso.FileExists(filePath) Then
-        MsgBox "No learned replies file found." & vbCrLf & vbCrLf & _
-               "Expected at: " & filePath & vbCrLf & vbCrLf & _
-               "Drag sent reply emails into the '" & RuntimeFolderLearnReply & "' folder, " & _
-               "or run ScanSentForReplyPatterns.", _
-               vbInformation, "Learned Replies"
+    If Len(content) = 0 Then
+        ShowLearnedRepliesSummaryCore = "No learned replies yet. Expected at: " & filePath & vbCrLf & _
+            "Drag sent reply emails into the '" & RuntimeFolderLearnReply & "' folder, " & _
+            "or run ScanSentForReplyPatterns."
         GoTo PROC_EXIT
     End If
 
-    ' Count lines
     lineCount = 0
-    Set ts = fso.OpenTextFile(filePath, 1)
-    Do While Not ts.AtEndOfStream
-        line = Trim(ts.ReadLine)
-        If Len(line) > 0 And Left(line, 1) <> "#" Then lineCount = lineCount + 1
-    Loop
+    lines = SplitLines(content)
+    For i = LBound(lines) To UBound(lines)
+        If Len(Trim(lines(i))) > 0 And Left(Trim(lines(i)), 1) <> "#" Then lineCount = lineCount + 1
+    Next i
 
-    MsgBox "Learned reply pairs: " & lineCount & vbCrLf & vbCrLf & _
-           "File: " & filePath & vbCrLf & vbCrLf & _
-           "Using top " & RuntimeMaxReplyExamples & " most-recent examples per draft.", _
-           vbInformation, "Learned Replies"
+    ShowLearnedRepliesSummaryCore = "Learned reply pairs: " & lineCount & vbCrLf & _
+        "File: " & filePath & vbCrLf & _
+        "Using top " & RuntimeMaxReplyExamples & " most-recent examples per draft."
 
 PROC_EXIT:
-    On Error Resume Next
-    If Not ts Is Nothing Then ts.Close: Set ts = Nothing
-    Set fso = Nothing
     PopCallStack
-    Exit Sub
+    Exit Function
 PROC_ERR:
-    LogError "EmailAgent", "ShowLearnedRepliesSummary", Err.Number, Err.Description
+    LogError "EmailAgent", "ShowLearnedRepliesSummaryCore", Err.Number, Err.Description
+    ShowLearnedRepliesSummaryCore = "ERROR: could not read learned replies: " & Err.Description
     Resume PROC_EXIT
-End Sub
+End Function

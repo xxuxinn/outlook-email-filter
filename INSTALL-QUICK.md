@@ -1,6 +1,6 @@
 # Quick Installation Guide
 
-Outlook Email Agent v3.0 — how to install.
+Outlook Email Agent v3.1 — how to install.
 
 ## Installation
 
@@ -9,9 +9,12 @@ Outlook Email Agent v3.0 — how to install.
 2. **Import VBA modules** (File → Import each):
    - `src/Config.bas`
    - `src/Utilities.bas`
+   - `src/AgentMemory.bas`
    - `src/EmailFilter.bas`
    - `src/EmailAgent.bas`
+   - `src/EmailDigest.bas`
    - `src/BatchFilter.bas`
+   - `src/Bridge.bas`
 
 3. **Paste ThisOutlookSession**: Open `src/ThisOutlookSession.bas` in a text editor, copy all code, paste into the built-in `ThisOutlookSession` module in VBA Editor.
 
@@ -27,10 +30,13 @@ See [docs/INSTALL.md](docs/INSTALL.md) for full details.
 
 ### VBA Modules
 - `Config.bas` — Configuration constants and runtime variables
-- `Utilities.bas` — Helper functions, INI reader/writer, CallLLM (multi-provider)
-- `EmailFilter.bas` — Core classification engine (10-rule chain)
+- `Utilities.bas` — Helper functions, UTF-8 file I/O, INI reader/writer, CallLLM (multi-provider, with timeouts)
+- `AgentMemory.bas` — Decision log, sender history, LLM correction capture
+- `EmailFilter.bas` — Core classification engine (10-rule chain + structured LLM fallback)
 - `EmailAgent.bas` — Agent: addressing patterns, auto-reply, reply learning
+- `EmailDigest.bas` — Daily triage digest + rule mining
 - `BatchFilter.bas` — Bulk operations and macro launchers
+- `Bridge.bas` — Web UI/MCP command bridge + digest scheduler
 - `ThisOutlookSession` — Event handlers (startup, learn-folder watchers)
 
 ### Folders (created under Inbox)

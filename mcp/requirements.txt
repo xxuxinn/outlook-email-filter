@@ -1,0 +1,5 @@
+# Runtime dependency for the Outlook Email Agent MCP server.
+# Install: pip install -r requirements.txt
+mcp>=1.2.0
+
+# Optional (tests): pip install pytest

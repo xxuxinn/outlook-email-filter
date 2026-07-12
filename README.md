@@ -1,6 +1,18 @@
-# Outlook Email Agent v3.0
+# Outlook Email Agent v3.1
 
-A VBA-based email agent for Microsoft Outlook that classifies emails using a priority rule chain, learns from your manual sorting, and drafts replies using LLM few-shot examples.
+A VBA-based email agent for Microsoft Outlook that classifies emails using a priority rule chain with a structured, confidence-gated LLM fallback, learns from your manual sorting AND from its own mistakes, drafts replies in your style, delivers a ranked daily triage digest, and proposes new filtering rules for your approval.
+
+## What's New in v3.1
+
+- **Daily triage digest**: a ranked morning briefing (*Needs action / Worth a look / FYI*) built from the last 24 h, grouped by conversation, saved as markdown and emailed to yourself — scheduled automatically, no cron needed
+  - *In plain terms:* instead of opening a full inbox, you get one email that says "these 3 need answers, this deadline is Friday, the rest was junk and here's why."
+- **Structured LLM classification**: JSON verdicts with category, urgency (1–5), and confidence; uncertain DELETEs are demoted to the Review folder instead of the bin; urgent KEEPs get an "Urgent" category and high-importance flag inside Outlook
+- **Context-enriched decisions**: the LLM is told the sender's track record ("47 emails, 45 deleted, you never replied") from the new `decision_log.txt` before it judges
+- **Correction loop**: reverse an LLM decision by dragging to a learn folder, and that mistake is replayed to the model as a "don't do this again" example in every future classification
+- **Rule mining**: weekly, the LLM proposes new sender/subject rules from your Review folder and history — you approve or reject each in the Web UI before anything goes live
+- **MCP server** (`mcp/`): connect Claude Desktop or Claude Code directly to the agent — run dry-runs, read learned rules, generate digests, add rules, all through the local file bridge
+- **Real-time = batch**: emails arriving live now get the same LLM classification as batch runs (previously they skipped the LLM entirely)
+- **Hardened foundations**: HTTP timeouts on all LLM calls (a stalled server can no longer freeze Outlook), re-entrancy-guarded command poller, honest bridge results with real counts, token-authenticated Web UI, UTF-8 data files end-to-end (Chinese patterns survive the VBA↔Python boundary), and ~40 audited bug fixes including one that could delete a real Exchange rule
 
 ## What's New in v3.0
 
@@ -29,7 +41,7 @@ A VBA-based email agent for Microsoft Outlook that classifies emails using a pri
 ### Installation
 
 1. **Enable macros**: File → Options → Trust Center → Macro Settings → Enable all macros
-2. **Import VBA modules** (Alt+F11 → File → Import): `Config.bas`, `Utilities.bas`, `EmailFilter.bas`, `EmailAgent.bas`, `BatchFilter.bas`
+2. **Import VBA modules** (Alt+F11 → File → Import): `Config.bas`, `Utilities.bas`, `AgentMemory.bas`, `EmailFilter.bas`, `EmailAgent.bas`, `EmailDigest.bas`, `BatchFilter.bas`, `Bridge.bas`
 3. **Paste ThisOutlookSession**: Copy-paste `src/ThisOutlookSession.bas` into the built-in module (see [docs/INSTALL.md](docs/INSTALL.md))
 4. **Compile**: Debug → Compile Project → Ctrl+S
 5. **Restart Outlook** — `settings.ini` is auto-created with defaults
@@ -51,16 +63,22 @@ python server.py
 
 | Tab | What you can do |
 |-----|----------------|
-| **Settings** | View and edit all `settings.ini` sections in-browser, save with one click |
-| **Macros** | Click-to-run buttons for all major macros (requires Outlook running) |
+| **Settings** | View and edit all `settings.ini` sections in-browser (API keys masked), save with one click |
+| **Macros** | Click-to-run buttons for allowlisted macros with real result output (requires Outlook running) |
 | **Learned Rules** | Browse sender rules, subject rules, and reply examples |
-| **Emails** | Read-only email browser via Outlook COM (Windows only) |
-| **Chat** | Conversational commands: "dry run", "show version", "provider claude", etc. |
-| **Logs** | Live view of `error.log` |
+| **Digest** | Read the latest daily digest; generate one on demand |
+| **Proposals** | Approve/reject LLM-mined rule proposals before they go live |
+| **Decisions** | Browse the classification decision log (who/what/why/confidence) |
+| **Chat** | Conversational commands: "dry run", "daily digest", "propose rules", "provider claude", etc. |
+| **Logs** | Live view of `error.log` and the LLM debug log |
 
-The Web UI reads data files directly. Macro execution uses a file-based command bridge: the server writes a JSON file, the VBA poller (started automatically at Outlook startup) picks it up, executes the macro, and writes the result. Outlook must be running for macros to execute.
+The Web UI reads data files directly. Macro execution uses a file-based command bridge: the server writes a JSON file, the VBA poller (started automatically at Outlook startup) picks it up, executes the macro, and writes the result. Outlook must be running for macros to execute. All API routes require a local auth token (auto-generated, injected into the page — this blocks cross-site request forgery from other websites in your browser).
 
-Requires: Python 3.10+, Windows for COM features (settings/rules/logs work on any OS). See [webui/README.md](webui/README.md) for full details.
+Requires: Python 3.10+ (settings/rules/logs/digest tabs work on any OS; macros need Outlook on Windows). See [webui/README.md](webui/README.md) for full details.
+
+## Claude Desktop / Claude Code integration (Optional)
+
+The `mcp/` directory contains an MCP (Model Context Protocol) server that exposes the agent to Claude Desktop and Claude Code: run dry-runs, generate the digest, read learned rules and recent decisions, add sender rules, and draft replies in your learned style — all through the same local file bridge, nothing leaves your machine except your configured LLM calls. Destructive bulk operations are deliberately not exposed. Setup snippets: [mcp/README.md](mcp/README.md).
 
 ## Classification Rules
 
@@ -87,19 +105,30 @@ First match wins. Rules 0 and 0.5 are learned from your drag-and-drop actions.
 outlook-email-filter/
 ├── src/
 │   ├── Config.bas                 # DEFAULT_* constants + Runtime* variables
-│   ├── Utilities.bas              # Helpers, CallLLM, INI I/O, error handling, bridge helpers
-│   ├── EmailFilter.bas            # Classification engine + LLM wrappers
+│   ├── Utilities.bas              # Helpers, CallLLM (with timeouts), UTF-8 I/O, INI, error handling
+│   ├── AgentMemory.bas            # Decision log, sender history, LLM correction capture
+│   ├── EmailFilter.bas            # Classification engine + structured LLM classify
 │   ├── EmailAgent.bas             # Agent: addressing, auto-reply, reply learning
-│   ├── BatchFilter.bas            # Bulk processing + macro launchers
-│   └── ThisOutlookSession.bas     # Event handlers + Web UI command poller (copy-paste, not import)
+│   ├── EmailDigest.bas            # Daily triage digest + rule mining
+│   ├── BatchFilter.bas            # Interactive macros over headless *Core functions
+│   ├── Bridge.bas                 # Web UI/MCP command bridge + scheduler
+│   └── ThisOutlookSession.bas     # Event handlers (copy-paste, not import)
 ├── webui/
-│   ├── server.py                  # Flask app — all API routes
+│   ├── server.py                  # Flask app — all API routes (token auth)
+│   ├── auth.py                    # Local auth token management
+│   ├── macros.py                  # Macro manifest: allowlist + arg validation
 │   ├── bridge.py                  # File-based command bridge to VBA
-│   ├── settings_manager.py        # settings.ini read/write
+│   ├── settings_manager.py        # settings.ini read/write (UTF-8, secrets masked)
+│   ├── datafiles.py               # Digest/decisions/proposals readers + approval
 │   ├── chat.py                    # Keyword command parser
-│   ├── requirements.txt           # flask, pywin32
+│   ├── tests/                     # pytest suite (runs on any OS)
+│   ├── requirements.txt           # flask
 │   ├── static/                    # index.html, style.css, app.js (SPA)
 │   └── README.md                  # Web UI setup and API reference
+├── mcp/
+│   ├── outlook_agent_mcp.py       # MCP stdio server for Claude Desktop/Code (15 tools)
+│   ├── tests/                     # pytest suite
+│   └── README.md                  # Registration snippets + tool table
 ├── docs/
 │   ├── INSTALL.md                 # Installation guide (fresh install, upgrade, migration)
 │   ├── USER_MANUAL.md             # Complete user reference

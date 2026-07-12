@@ -24,3 +24,10 @@ __pycache__/
 # Environment/secrets
 .env
 *.key
+
+# Virtualenvs / test artifacts
+.venv/
+.pytest_cache/
+
+# Session logs
+claude-scheduled-resume.log

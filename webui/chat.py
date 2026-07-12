@@ -1,10 +1,13 @@
 """chat.py — Keyword-based command parser for the chat interface.
 
 Maps natural language phrases to actions without requiring an LLM.
-Returns an action descriptor that server.py dispatches.
+Returns an action descriptor that server.py dispatches. Every macro action
+is validated against the macros.py manifest before being returned.
 """
 
 from typing import Optional
+
+import macros
 
 # Map of (keywords tuple) → action descriptor
 # Checked in order; first match wins.
@@ -17,8 +20,16 @@ COMMAND_MAP = [
     (("filter inbox", "filter emails", "run filter", "filter all"),
      {"type": "macro", "macro": "FilterExistingEmails", "label": "Filtering inbox..."}),
 
+    # --- Daily digest ---
+    (("daily digest", "generate digest", "digest"),
+     {"type": "macro", "macro": "GenerateDailyDigest", "label": "Generating daily digest..."}),
+
+    # --- Rule proposals ---
+    (("propose rules", "suggest rules", "mine rules"),
+     {"type": "macro", "macro": "ProposeRules", "label": "Proposing rules from decision history..."}),
+
     # --- Version / status ---
-    (("version", "status", "show version", "info"),
+    (("show version", "version", "status"),
      {"type": "macro", "macro": "ShowVersionInfo", "label": "Getting version info..."}),
 
     # --- Learned senders ---
@@ -32,6 +43,10 @@ COMMAND_MAP = [
     # --- Learned replies ---
     (("show replies", "learned replies", "reply examples"),
      {"type": "api", "endpoint": "/api/learned/replies", "label": "Fetching learned replies..."}),
+
+    # --- Decisions ---
+    (("show decisions", "decision log", "decisions"),
+     {"type": "api", "endpoint": "/api/decisions", "label": "Fetching decision log..."}),
 
     # --- Errors / logs ---
     (("show errors", "error log", "errors", "logs"),
@@ -91,10 +106,13 @@ COMMAND_MAP = [
 HELP_TEXT = """Available commands:
 • **dry run** / preview — preview filter decisions (no changes)
 • **filter inbox** — filter all inbox emails
+• **generate digest** / daily digest — generate today's digest now
+• **propose rules** / suggest rules — mine the decision log for new rules
 • **show version** / status — show version and config info
 • **show senders** — view learned sender rules
 • **show subjects** — view learned subject rules
 • **show replies** — view learned reply examples
+• **show decisions** — view the recent decision log
 • **show errors** — view recent error log
 • **reload settings** — reload settings.ini
 • **provider local/azure/claude/openai** — switch LLM provider
@@ -106,10 +124,18 @@ HELP_TEXT = """Available commands:
 
 
 def parse(message: str) -> Optional[dict]:
-    """Parse a user message and return an action descriptor, or None if unknown."""
+    """Parse a user message and return an action descriptor, or None if unknown.
+
+    Macro actions are only returned when the macro exists in the server-side
+    manifest (macros.py) — anything else is treated as unknown.
+    """
     msg = message.lower().strip()
+    if not msg:
+        return None
     for keywords, action in COMMAND_MAP:
         if any(kw in msg for kw in keywords):
+            if action["type"] == "macro" and macros.get_macro(action["macro"]) is None:
+                return None
             return action
     return None
 

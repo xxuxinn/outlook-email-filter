@@ -92,6 +92,9 @@ Private Sub Application_Startup()
     ' Auto-sync learned rules with cloud on startup (silent, skips if unavailable)
     SyncLearnedRulesAuto
 
+    ' Warm the sender-history cache (context enrichment for LLM classification)
+    LoadSenderStats
+
     LogMessage "INFO", "Email Agent v" & FILTER_VERSION & " initialized"
 
 PROC_EXIT:
@@ -133,7 +136,11 @@ End Sub
 '-------------------------------------------------------------------------------
 
 ' Fires when a new email arrives in the Inbox — real-time filtering.
-' Auto-reply drafting is also triggered here when RuntimeAutoReplyOnArrival = True.
+' v3.1: routes through ExecuteAction, so ambiguous emails now get the SAME
+' LLM classification as batch runs (previously they went straight to Review
+' without ever consulting the LLM), and every decision lands in
+' decision_log.txt. Auto-reply drafting triggers on resolved KEEPs when
+' RuntimeAutoReplyOnArrival = True (drafts only — never auto-sent).
 Private Sub inboxItems_ItemAdd(ByVal Item As Object)
     On Error GoTo ErrorHandler
 
@@ -152,35 +159,24 @@ Private Sub inboxItems_ItemAdd(ByVal Item As Object)
     senderName = mail.SenderName
     subject = mail.subject
 
-    ' Execute the action
-    Select Case decision
-        Case "MOVE_II"
-            mail.Move GetOrCreateFolder(RuntimeFolderProtected)
-            LogMessage "INFO", "AUTO: MOVED " & senderName & " | " & subject & " to " & RuntimeFolderProtected
+    ' Execute (handles LLM resolution of LLM_REVIEW + decision logging)
+    Dim resolvedAction As String
+    ExecuteAction mail, decision, Nothing, resolvedAction
 
-        Case "DELETE"
-            mail.Delete
-            LogMessage "INFO", "AUTO: DELETED " & senderName & " | " & subject
+    LogMessage "INFO", "AUTO: " & resolvedAction & " | " & senderName & " | " & subject
 
-        Case "LLM_REVIEW"
-            ' Move to Review folder (or call LLM if configured)
-            mail.Move GetOrCreateFolder(RuntimeFolderReview)
-            LogMessage "INFO", "AUTO: MOVED " & senderName & " | " & subject & " to " & RuntimeFolderReview
-
-        Case "KEEP"
-            ' Leave in Inbox
-            LogMessage "INFO", "AUTO: KEPT " & senderName & " | " & subject
-
-            ' Auto-draft reply if enabled (v3.0)
-            If RuntimeAutoReplyOnArrival And RuntimeEnableAutoReply Then
-                DraftAutoReply mail
-            End If
-    End Select
+    ' Auto-draft reply for resolved KEEPs (mail object is still valid: KEEP
+    ' means the email was neither moved nor deleted)
+    If resolvedAction = "KEEP" Then
+        If RuntimeAutoReplyOnArrival And RuntimeEnableAutoReply Then
+            DraftAutoReply mail
+        End If
+    End If
 
     Exit Sub
 
 ErrorHandler:
-    LogMessage "ERROR", "inboxItems_ItemAdd error: " & Err.Description
+    LogError "ThisOutlookSession", "inboxItems_ItemAdd", Err.Number, Err.Description
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -203,6 +199,18 @@ Private Sub learnKeepItems_ItemAdd(ByVal Item As Object)
     ' Check if this sender previously had a DELETE rule (rule reversal)
     Dim previousAction As String
     previousAction = LookupLearnedSender(senderEmail)
+
+    ' Correction capture: if the LLM most recently DELETEd/REVIEWed this sender
+    ' and the user is now teaching KEEP, record it as a few-shot correction
+    Dim lastDecision As String
+    lastDecision = GetLastDecisionForSender(senderEmail)
+    If Left(lastDecision, 4) = "LLM|" Then
+        Dim llmAction As String
+        llmAction = Mid(lastDecision, 5)
+        If llmAction = "DELETE" Or llmAction = "REVIEW" Then
+            RecordCorrection senderEmail, mail.subject, llmAction, "KEEP"
+        End If
+    End If
 
     RecordLearnedSender senderEmail, "KEEP"
     LogMessage "INFO", "LEARNED KEEP from folder " & RuntimeFolderLearnKeep & ": " & senderEmail & _
@@ -242,6 +250,14 @@ Private Sub learnDeleteItems_ItemAdd(ByVal Item As Object)
     ' Check if this sender previously had a KEEP rule (rule reversal)
     Dim previousAction As String
     previousAction = LookupLearnedSender(senderEmail)
+
+    ' Correction capture: if the LLM most recently KEPT this sender and the
+    ' user is now teaching DELETE, record it as a few-shot correction
+    Dim lastDecision As String
+    lastDecision = GetLastDecisionForSender(senderEmail)
+    If lastDecision = "LLM|KEEP" Then
+        RecordCorrection senderEmail, mail.subject, "KEEP", "DELETE"
+    End If
 
     RecordLearnedSender senderEmail, "DELETE"
     LogMessage "INFO", "LEARNED DELETE from folder " & RuntimeFolderLearnDelete & ": " & senderEmail & _
@@ -294,13 +310,13 @@ Private Sub learnReplyItems_ItemAdd(ByVal Item As Object)
     Loop
     originalSubject = trimmedSubject
 
-    ' Extract reply body (text before original message delimiter)
+    ' Extract reply body / original snippet (shared helpers in EmailAgent.bas —
+    ' the previous local copies drifted from the EmailAgent versions)
     Dim myReplyText As String
-    myReplyText = ExtractMyReplyFromBody(mail.Body)
+    myReplyText = ExtractReplyTextFromBody(mail.Body)
 
-    ' Extract original body snippet (text after delimiter)
     Dim originalBodySnippet As String
-    originalBodySnippet = ExtractOriginalFromBody(mail.Body)
+    originalBodySnippet = ExtractOriginalBodySnippet(mail.Body)
 
     ' Get the original sender (first recipient of the sent reply)
     Dim originalFrom As String
@@ -316,6 +332,7 @@ Private Sub learnReplyItems_ItemAdd(ByVal Item As Object)
     End If
 
     RecordLearnedReply originalSubject, originalFrom, originalBodySnippet, myReplyText
+    InvalidateRepliedToCache  ' AgentMemory: sender is now in the replied-to set
     LogMessage "INFO", "LEARNED REPLY from folder " & RuntimeFolderLearnReply & ": " & Left(originalSubject, 50)
 
 PROC_EXIT:
@@ -326,62 +343,6 @@ PROC_ERR:
     LogError "ThisOutlookSession", "learnReplyItems_ItemAdd", Err.Number, Err.Description
     Resume PROC_EXIT
 End Sub
-
-' Extract user's reply text from body (before the quoted original message)
-Private Function ExtractMyReplyFromBody(ByVal body As String) As String
-    Dim delimiters(4) As String
-    delimiters(0) = vbCrLf & "From:"
-    delimiters(1) = vbLf & "From:"
-    delimiters(2) = "-----Original Message-----"
-    delimiters(3) = "________________________________"
-    delimiters(4) = vbCrLf & "Sent:"
-
-    Dim earliest As Long
-    Dim pos As Long
-    Dim d As Integer
-    earliest = 0
-
-    For d = 0 To 4
-        pos = InStr(1, body, delimiters(d), vbTextCompare)
-        If pos > 1 Then
-            If earliest = 0 Or pos < earliest Then earliest = pos
-        End If
-    Next d
-
-    If earliest > 1 Then
-        ExtractMyReplyFromBody = Trim(Left(body, earliest - 1))
-    Else
-        ExtractMyReplyFromBody = ""
-    End If
-End Function
-
-' Extract original message snippet from body (after the quoted original delimiter)
-Private Function ExtractOriginalFromBody(ByVal body As String) As String
-    Dim delimiters(4) As String
-    delimiters(0) = vbCrLf & "From:"
-    delimiters(1) = vbLf & "From:"
-    delimiters(2) = "-----Original Message-----"
-    delimiters(3) = "________________________________"
-    delimiters(4) = vbCrLf & "Sent:"
-
-    Dim earliest As Long
-    Dim pos As Long
-    Dim d As Integer
-    earliest = 0
-
-    For d = 0 To 4
-        pos = InStr(1, body, delimiters(d), vbTextCompare)
-        If pos > 1 Then
-            If earliest = 0 Or pos < earliest Then earliest = pos
-        End If
-    Next d
-
-    If earliest > 0 And earliest + 10 < Len(body) Then
-        ExtractOriginalFromBody = Left(Trim(Mid(body, earliest)), 500)
-    Else
-        ExtractOriginalFromBody = ""
-    End If
-End Function
 
 ' Fires when an email is dragged into the LearnSubjectDelete folder (learn to DELETE by subject)
 Private Sub learnSubjectDeleteItems_ItemAdd(ByVal Item As Object)
@@ -451,7 +412,7 @@ End Sub
 
 '===============================================================================
 ' WEB UI COMMAND POLLER
-' All poller logic has been moved to Utilities.bas (standard module) because
-' Application.OnTime cannot call Subs in Document modules (ThisOutlookSession).
+' All poller logic lives in Bridge.bas (standard module) because Win32 timer
+' callbacks (AddressOf) cannot target Subs in Document modules like this one.
 ' See: StartCommandPollerStd, StopCommandPollerStd, PollForCommandsTimer
 '===============================================================================

@@ -3,6 +3,12 @@
 All diagrams are authored in Mermaid (`.mmd` source) with pre-rendered `.svg` output.
 The three diagrams in sections 1–3 below are also embedded inline so GitHub renders them directly on this page.
 
+> **v3.1 note**: these diagrams show the v3.0 layout. Since then the command bridge moved
+> from `Utilities.bas` into a dedicated `Bridge.bas`, and three modules were added
+> (`AgentMemory.bas` — decision log/sender history, `EmailDigest.bas` — daily digest +
+> rule mining, plus an `mcp/` server). The classification chain (Rules 0–10) is unchanged,
+> except Rule 10's LLM step is now structured JSON with a confidence gate.
+
 ## Index
 
 | Diagram | Source | Rendered | Description |

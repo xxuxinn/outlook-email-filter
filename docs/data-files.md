@@ -1,6 +1,8 @@
-# Data Files — Outlook Email Agent v3.0
+# Data Files — Outlook Email Agent v3.1
 
 All data files live under `%APPDATA%\OutlookEmailFilter\`. The folder is auto-created on first run.
+
+**Encoding (v3.1)**: `settings.ini` and all pipe-delimited data files are **UTF-8 with BOM**. Legacy ANSI files are detected by their missing BOM and migrated to UTF-8 on first write. VBA reads/writes them via `ReadTextFileSmart` / `WriteTextFileUTF8` / `AppendLineUTF8` (Utilities.bas); Python reads `utf-8-sig` with a `cp950`/`latin-1` fallback for legacy files. This fixes Chinese patterns (e.g. `優惠`) corrupting across the VBA/Python boundary.
 
 ## File Summary
 
@@ -10,9 +12,49 @@ All data files live under `%APPDATA%\OutlookEmailFilter\`. The folder is auto-cr
 | `learned_senders.txt` | Pipe-delimited, append-only | Sender → KEEP/DELETE rules |
 | `learned_subjects.txt` | Pipe-delimited, append-only | Subject fragment → DELETE rules |
 | `learned_replies.txt` | Pipe-delimited, append-only | Reply style examples for few-shot drafting |
-| `error.log` | Pipe-delimited, append-only | Structured error log |
-| `llm_debug.log` | Multi-line blocks | LLM request/response debug log (only when LogLevel=DEBUG) |
-| `commands/*.json` / `*.result` | JSON | Web UI command bridge (transient, auto-cleaned) |
+| `decision_log.txt` | Pipe-delimited, append-only | Every executed classification (v3.1) |
+| `llm_corrections.txt` | Pipe-delimited, append-only | User reversals of LLM decisions → few-shot corrections (v3.1) |
+| `rule_proposals.txt` | Pipe-delimited, rewritten on status change | LLM-mined rule proposals awaiting approval (v3.1) |
+| `digests/digest_YYYY-MM-DD.md` | Markdown | Daily triage digest, one file per day (v3.1) |
+| `webui_token.txt` | 32 hex chars | Web UI auth token (created by server.py) |
+| `error.log` | Pipe-delimited, append-only | Structured error log (rotated to `.old` at 2 MB) |
+| `llm_debug.log` | Multi-line blocks | LLM request/response debug log (only when LogLevel=DEBUG; rotated at 5 MB) |
+| `commands/*.json` / `*.result` | JSON | Web UI/MCP command bridge (transient, auto-cleaned) |
+
+---
+
+## decision_log.txt (v3.1)
+
+**Format**: `timestamp|senderEmail|subject(≤80 chars)|source|action|confidence`
+```
+2026-07-12 09:15:00|noreply@example.com|Weekly Update|RULE8_SENDER_PATTERN|DELETE|1.00
+2026-07-12 09:16:30|student@connect.polyu.hk|Question about thesis|LLM|KEEP|0.92
+```
+
+- `source`: `LEARNED_SENDER`, `LEARNED_SUBJECT`, `RULE1_PROTECTED` … `RULE9_SUBJECT_PATTERN`, `LLM`, `DEFAULT`
+- `action`: `KEEP` | `DELETE` | `MOVE_II` | `REVIEW`; `confidence` is 1.00 for deterministic rules
+- Written ONLY by `ExecuteAction` (dry-run/report paths never record)
+- Powers: sender-history context in LLM prompts (`GetSenderContext`), the digest's "filter activity" section, rule mining evidence, and the Web UI Decisions tab
+- I/O: `RecordDecision` / `LoadSenderStats` / `GetLastDecisionForSender` in AgentMemory.bas
+
+## llm_corrections.txt (v3.1)
+
+**Format**: `timestamp|senderEmail|subject|wrongAction|correctAction`
+
+- Appended when a learn-folder drag reverses the LLM's most recent decision for that sender (e.g. LLM said DELETE, user dragged to LearnKeep)
+- The 5 most recent corrections are injected into every LLM classification prompt as few-shot examples
+- I/O: `RecordCorrection` / `GetRecentCorrectionsBlock` in AgentMemory.bas
+
+## rule_proposals.txt (v3.1)
+
+**Format**: `id|type|value|action|reason|status|timestamp` where `id` = 8 lowercase hex chars, `type` ∈ SENDER/SUBJECT, `action` ∈ KEEP/DELETE, `status` ∈ PENDING/APPROVED/REJECTED
+```
+0c91a2f3|SENDER|newsletter@vendor.com|DELETE|Deleted 6 times, never kept|PENDING|2026-07-12 08:05:00
+```
+
+- Written by `ProposeRulesCore` (EmailDigest.bas) — weekly via the scheduler or on demand
+- Approved/rejected in the Web UI Proposals tab; approval appends to the learned files and reloads VBA caches
+- Subject proposals are validated hard: DELETE-only, ≥12 chars, multi-word (substring matching makes short patterns dangerous)
 
 ---
 
@@ -22,7 +64,7 @@ Created automatically with defaults if missing. Edit with any text editor.
 
 ```ini
 [General]
-Version=3.0.0
+Version=3.1.0
 EnableLogging=True
 LogLevel=INFO          ; DEBUG | INFO | WARN | ERROR
 EnableSelfImproving=True
@@ -62,11 +104,13 @@ APIKeyMethod=ENV        ; ENV | HARDCODED
 APIKeyEnvVar=LLM_API_KEY
 APIKeyHardcoded=
 ClassifyBodyChars=800
-ClassifyMaxTokens=100
+ClassifyMaxTokens=200      ; raised in v3.1 for structured JSON output
 SummarizeMaxTokens=300
 ReplyMaxTokens=800
 Temperature=0.3
 ReplyTemperature=0.7
+RequestTimeoutSeconds=60   ; HTTP receive timeout for LLM calls (v3.1)
+ConfidenceThreshold=0.60   ; LLM DELETEs below this confidence go to Review (v3.1)
 SystemPrompt=You are filtering emails for...
 
 [Agent]
@@ -78,6 +122,17 @@ ReplyPersona=              ; blank = auto-generated from name patterns
 ScanSentItems=False
 ScanSentDays=30
 AutoReplyForSenders=       ; blank = draft for all KEEP emails; comma-separated senders to restrict
+EnableTaskExtraction=False ; create draft Outlook Tasks from digest deadlines (v3.1)
+EnableContextEnrichment=True ; inject sender history into LLM prompts (v3.1)
+
+[Digest]
+EnableDailyDigest=False    ; daily ranked triage digest (v3.1)
+DigestHour=8               ; digest runs once per day after this hour (0-23)
+DigestMaxEmails=50
+DigestSendEmail=True       ; also send the digest as a self-addressed email
+EnableRuleMining=False     ; weekly LLM rule proposals (approve in Web UI)
+LastDigestDate=            ; state, managed by the scheduler
+LastRuleMiningDate=        ; state, managed by the scheduler
 
 [Sync]
 EnableCloudSync=False

@@ -3,14 +3,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="auth-token" content="__AUTH_TOKEN__">
   <title>Outlook Email Agent</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 
+<div id="warning-banner" class="banner hidden">
+  <span id="warning-banner-text"></span>
+  <button class="banner-close" onclick="hideBanner()">✕</button>
+</div>
+
 <header>
   <h1>Outlook Email Agent</h1>
   <span id="status-badge" class="status-badge">connecting...</span>
+  <span id="bridge-badge" class="status-badge">bridge?</span>
   <span id="version-info"></span>
 </header>
 
@@ -18,6 +25,9 @@
   <button data-tab="settings" class="active">Settings</button>
   <button data-tab="macros">Macros</button>
   <button data-tab="rules">Learned Rules</button>
+  <button data-tab="digest">Digest</button>
+  <button data-tab="proposals">Proposals</button>
+  <button data-tab="decisions">Decisions</button>
   <button data-tab="chat">Chat</button>
   <button data-tab="logs">Logs</button>
 </nav>
@@ -30,7 +40,7 @@
       <div class="flex-row" style="margin-bottom:16px">
         <button class="btn success" onclick="loadSettings()">↺ Refresh</button>
         <button class="btn" onclick="reloadSettings()">⟳ Send Reload to Outlook</button>
-        <span class="text-dim">Changes to settings.ini take effect after reload.</span>
+        <span class="text-dim">Changes to settings.ini take effect after reload. Secrets are masked.</span>
       </div>
       <div id="settings-sections">
         <div class="text-dim">Loading settings...</div>
@@ -47,7 +57,7 @@
           Commands are sent to Outlook via the file bridge.
           Outlook must be running with the command poller active (auto-started on Application_Startup).
         </p>
-        <div class="macro-grid" id="macro-grid"></div>
+        <div class="macro-grid" id="macro-grid"><span class="text-dim">Loading macro list...</span></div>
       </div>
       <div class="card">
         <h3>Output</h3>
@@ -89,12 +99,74 @@
     </div>
   </div>
 
+  <!-- ===== DIGEST TAB ===== -->
+  <div class="tab-panel" id="tab-digest">
+    <div class="panel-content">
+      <div class="flex-row" style="margin-bottom:16px">
+        <button class="btn success" onclick="loadDigest()">↺ Refresh</button>
+        <button class="btn primary" onclick="generateDigest()">⚡ Generate Digest Now</button>
+        <span class="text-dim" id="digest-status"></span>
+      </div>
+      <div class="card">
+        <h3 id="digest-title">Daily Digest</h3>
+        <div class="digest-content" id="digest-content">
+          <div class="text-dim">Loading...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== PROPOSALS TAB ===== -->
+  <div class="tab-panel" id="tab-proposals">
+    <div class="panel-content">
+      <div class="flex-row" style="margin-bottom:16px">
+        <button class="btn success" onclick="loadProposals()">↺ Refresh</button>
+        <button class="btn primary" onclick="generateProposals()">⚡ Generate Proposals</button>
+        <span class="text-dim" id="proposals-status"></span>
+      </div>
+      <div class="card">
+        <h3>Rule Proposals</h3>
+        <p class="text-dim" style="margin-bottom:8px">
+          LLM-proposed rules mined from the decision log. Approving appends the rule to the
+          learned rules files and tells Outlook to reload.
+        </p>
+        <table>
+          <thead><tr>
+            <th>Type</th><th>Value</th><th>Action</th><th>Reason</th>
+            <th>Status</th><th>Proposed</th><th></th>
+          </tr></thead>
+          <tbody id="proposals-table-body"><tr><td colspan="7" class="text-dim">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== DECISIONS TAB ===== -->
+  <div class="tab-panel" id="tab-decisions">
+    <div class="panel-content">
+      <div class="flex-row" style="margin-bottom:16px">
+        <button class="btn success" onclick="loadDecisions()">↺ Refresh</button>
+        <span class="text-dim">Last 100 classification decisions (newest first)</span>
+      </div>
+      <div class="card">
+        <h3>Decision Log</h3>
+        <table>
+          <thead><tr>
+            <th>Time</th><th>Sender</th><th>Subject</th>
+            <th>Source</th><th>Action</th><th>Confidence</th>
+          </tr></thead>
+          <tbody id="decisions-table-body"><tr><td colspan="6" class="text-dim">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <!-- ===== CHAT TAB ===== -->
   <div class="tab-panel" id="tab-chat">
     <div class="chat-container">
       <div class="chat-messages" id="chat-messages"></div>
       <div class="chat-input-row">
-        <input type="text" id="chat-input" placeholder='Type a command, e.g. "dry run", "show version", "help"...'>
+        <input type="text" id="chat-input" placeholder='Type a command, e.g. "dry run", "generate digest", "help"...'>
         <button class="btn primary" onclick="sendChat()">Send</button>
       </div>
     </div>

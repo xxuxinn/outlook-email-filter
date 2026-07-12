@@ -46,9 +46,12 @@ In the Project Explorer (left panel), right-click each of these modules and choo
 
 - `Config`
 - `Utilities`
+- `AgentMemory` *(new in v3.1 — nothing to remove on first update)*
 - `EmailFilter` *(only if changed in this update)*
 - `EmailAgent` *(only if changed in this update)*
+- `EmailDigest` *(new in v3.1)*
 - `BatchFilter` *(only if changed in this update)*
+- `Bridge` *(new in v3.1)*
 
 > **Tip:** Check which `.bas` files changed by running `git diff --stat HEAD~1` in the terminal. Only remove/reimport modules that actually changed.
 
@@ -59,9 +62,12 @@ In the Project Explorer (left panel), right-click each of these modules and choo
 - Import each `.bas` file you removed in Step 3:
   - `src/Config.bas`
   - `src/Utilities.bas`
+  - `src/AgentMemory.bas` *(new in v3.1)*
   - `src/EmailFilter.bas` *(if changed)*
   - `src/EmailAgent.bas` *(if changed)*
+  - `src/EmailDigest.bas` *(new in v3.1)*
   - `src/BatchFilter.bas` *(if changed)*
+  - `src/Bridge.bas` *(new in v3.1)*
 
 ### Step 5: Update ThisOutlookSession (if changed)
 
@@ -146,12 +152,17 @@ You should see a MsgBox summarizing the merge results for learned senders, subje
 | Module | How to Update | When |
 |--------|---------------|------|
 | `Config.bas` | Remove → Import | When constants or Runtime vars change |
-| `Utilities.bas` | Remove → Import | When helpers, LLM, sync, or bridge logic changes |
+| `Utilities.bas` | Remove → Import | When helpers, LLM, sync, or file I/O logic changes |
+| `AgentMemory.bas` | Remove → Import | When decision-log / sender-history / correction logic changes (v3.1) |
 | `EmailFilter.bas` | Remove → Import | When classification rules change |
 | `EmailAgent.bas` | Remove → Import | When reply drafting or agent features change |
+| `EmailDigest.bas` | Remove → Import | When digest or rule-mining logic changes (v3.1) |
 | `BatchFilter.bas` | Remove → Import | When batch macros change |
+| `Bridge.bas` | Remove → Import | When bridge dispatcher / poller / scheduler changes (v3.1) |
 | `ThisOutlookSession` | Copy-paste into built-in object | When event handlers or startup/quit logic changes |
 | `Installer.bas` | Remove → Import | When setup automation changes (rare) |
+
+> ⚠️ Before removing modules, always run `StopCommandPollerStd` and `ThisOutlookSession.DisableRealTimeFilter` first — the Win32 poller timer will crash Outlook if its module is removed while active.
 
 ---
 

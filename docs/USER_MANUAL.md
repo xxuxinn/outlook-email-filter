@@ -2,6 +2,15 @@
 
 Complete reference for daily use, configuration, and maintenance.
 
+> **v3.1 update**: this manual covers the v3.0 feature set, which is unchanged. New in v3.1 —
+> daily triage digest (`GenerateDailyDigest`), LLM rule mining with Web UI approval
+> (`ProposeRules`), confidence-gated structured classification with sender-history context,
+> a correction loop (drag-to-learn now also teaches the LLM), an MCP server for Claude
+> Desktop/Code (`mcp/README.md`), Web UI token auth + Digest/Proposals/Decisions tabs, and
+> three new VBA modules to import (`AgentMemory.bas`, `EmailDigest.bas`, `Bridge.bas`).
+> See [README.md](../README.md), [macros.md](macros.md), and [data-files.md](data-files.md)
+> for the v3.1 additions; `ShowVersionInfo` should report **v3.1.0** after upgrading.
+
 ---
 
 ## Table of Contents

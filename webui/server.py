@@ -3,89 +3,89 @@
 Run with: python server.py
 Access at: http://localhost:5000
 
-Routes:
-  GET  /                           → serve SPA (index.html)
-  GET  /api/settings               → read settings.ini as JSON
-  POST /api/settings               → write {section, key, value}
-  POST /api/settings/reload        → send ReinitializeFilter command via bridge
-  GET  /api/learned/senders        → read learned_senders.txt
-  GET  /api/learned/subjects       → read learned_subjects.txt
-  GET  /api/learned/replies        → read learned_replies.txt
-  GET  /api/errors                 → read error.log (last N lines)
-  POST /api/errors/clear            → truncate error.log
-  GET  /api/llm-debug-log           → read llm_debug.log (last N lines)
-  POST /api/llm-debug-log/clear     → truncate llm_debug.log
-  POST /api/command                → send macro command via bridge
-  GET  /api/command/<id>/result    → poll for command result
-  POST /api/chat                   → parse chat message → action
-  GET  /api/status                 → version, provider, rule counts
+All /api/* routes require the X-Auth-Token header. The token is generated at
+<DATA_DIR>/webui_token.txt and injected into index.html when it is served, so
+opening the page in a browser is all that's needed. See README.md for the
+full route table.
 """
 
 import os
-import sys
-from pathlib import Path
+import re
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request
 
+import auth
 import bridge
 import chat
+import config
+import datafiles
+import macros
 import settings_manager
 
 app = Flask(__name__, static_folder="static")
 
-DATA_DIR = settings_manager.SETTINGS_DIR
+_CMD_ID_RE = re.compile(r"^[0-9a-f]{8}$")
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _read_pipe_file(filename: str, max_lines: int = 500) -> list[dict]:
-    """Read a pipe-delimited data file and return list of row dicts."""
-    path = os.path.join(DATA_DIR, filename)
-    if not os.path.exists(path):
-        return []
-    rows = []
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split("|")
-            rows.append(parts)
-    return rows[-max_lines:]
+def _int_param(name: str, default: int, lo: int = 1, hi: int = 1000) -> int:
+    """Parse an int query param defensively; clamp to [lo, hi]."""
+    raw = request.args.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, value))
 
 
-def _read_log(filename: str, max_lines: int = 200) -> list[str]:
-    path = os.path.join(DATA_DIR, filename)
-    if not os.path.exists(path):
-        return []
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        lines = f.readlines()
-    return [l.rstrip() for l in lines[-max_lines:]]
+def _json_body() -> dict:
+    data = request.get_json(silent=True)
+    return data if isinstance(data, dict) else {}
 
 
-def _count_rules(filename: str) -> int:
-    path = os.path.join(DATA_DIR, filename)
-    if not os.path.exists(path):
-        return 0
-    seen = set()
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#"):
-                key = line.split("|")[0].lower()
-                seen.add(key)
-    return len(seen)
+def _valid_cmd_id(cmd_id: str) -> bool:
+    return bool(_CMD_ID_RE.match(cmd_id or ""))
+
+
+def _send_bridge_command(macro_name: str, args: dict | None = None):
+    """Send a bridge command; return (cmd_id, error_message)."""
+    try:
+        return bridge.send_command(macro_name, args), None
+    except (OSError, RuntimeError) as e:
+        return None, f"Could not write command file: {e}"
 
 
 # ---------------------------------------------------------------------------
-# SPA
+# Auth — every /api/* request must carry X-Auth-Token
+# ---------------------------------------------------------------------------
+
+@app.before_request
+def _require_auth():
+    if request.path.startswith("/api/"):
+        if not auth.check_token(request.headers.get("X-Auth-Token")):
+            return jsonify({"error": "unauthorized"}), 401
+    return None
+
+
+# ---------------------------------------------------------------------------
+# SPA — index.html served with the auth token substituted in
 # ---------------------------------------------------------------------------
 
 @app.route("/")
 def index():
-    return send_from_directory(app.static_folder, "index.html")
+    path = os.path.join(app.static_folder, "index.html")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            html = f.read()
+    except OSError:
+        return Response("index.html not found", status=500, mimetype="text/plain")
+    html = html.replace("__AUTH_TOKEN__", auth.get_token())
+    return Response(html, mimetype="text/html")
 
 
 # ---------------------------------------------------------------------------
@@ -94,36 +94,57 @@ def index():
 
 @app.route("/api/settings", methods=["GET"])
 def get_settings():
-    return jsonify(settings_manager.read_all())
+    return jsonify(settings_manager.read_all(mask_secrets=True))
 
 
 @app.route("/api/settings", methods=["POST"])
 def post_setting():
-    data = request.get_json()
+    data = _json_body()
     section = data.get("section", "")
     key = data.get("key", "")
     value = data.get("value", "")
     if not section or not key:
-        return jsonify({"error": "section and key required"}), 400
-    settings_manager.write_setting(section, key, value)
+        return jsonify({"ok": False, "error": "section and key required"}), 400
+    try:
+        settings_manager.write_setting(section, key, value)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except OSError as e:
+        return jsonify({"ok": False, "error": f"Could not write settings.ini: {e}"}), 500
     return jsonify({"ok": True})
 
 
 @app.route("/api/settings/section", methods=["POST"])
 def post_section():
-    data = request.get_json()
+    data = _json_body()
     section = data.get("section", "")
     values = data.get("values", {})
-    if not section or not values:
-        return jsonify({"error": "section and values required"}), 400
-    settings_manager.write_section(section, values)
+    if not section or not isinstance(values, dict) or not values:
+        return jsonify({"ok": False, "error": "section and values required"}), 400
+    try:
+        settings_manager.write_section(section, values)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except OSError as e:
+        return jsonify({"ok": False, "error": f"Could not write settings.ini: {e}"}), 500
     return jsonify({"ok": True})
 
 
 @app.route("/api/settings/reload", methods=["POST"])
 def reload_settings():
-    cmd_id = bridge.send_command("ReinitializeFilter")
+    cmd_id, err = _send_bridge_command("ReinitializeFilter")
+    if err:
+        return jsonify({"ok": False, "error": err}), 500
     return jsonify({"ok": True, "command_id": cmd_id})
+
+
+# ---------------------------------------------------------------------------
+# Macro manifest
+# ---------------------------------------------------------------------------
+
+@app.route("/api/macros")
+def get_macros():
+    return jsonify({"macros": macros.MACROS})
 
 
 # ---------------------------------------------------------------------------
@@ -132,35 +153,37 @@ def reload_settings():
 
 @app.route("/api/learned/senders")
 def learned_senders():
-    rows = _read_pipe_file("learned_senders.txt")
-    result = []
+    rows = datafiles.read_pipe_file("learned_senders.txt")
     seen = {}
     for parts in rows:
         if len(parts) >= 2:
             email = parts[0].strip()
-            action = parts[1].strip().upper()
-            ts = parts[2].strip() if len(parts) >= 3 else ""
-            seen[email.lower()] = {"email": email, "action": action, "timestamp": ts}
+            seen[email.lower()] = {
+                "email": email,
+                "action": parts[1].strip().upper(),
+                "timestamp": parts[2].strip() if len(parts) >= 3 else "",
+            }
     return jsonify(list(seen.values()))
 
 
 @app.route("/api/learned/subjects")
 def learned_subjects():
-    rows = _read_pipe_file("learned_subjects.txt")
-    result = []
+    rows = datafiles.read_pipe_file("learned_subjects.txt")
     seen = {}
     for parts in rows:
         if len(parts) >= 2:
             subj = parts[0].strip()
-            action = parts[1].strip().upper()
-            ts = parts[2].strip() if len(parts) >= 3 else ""
-            seen[subj.lower()] = {"subject": subj, "action": action, "timestamp": ts}
+            seen[subj.lower()] = {
+                "subject": subj,
+                "action": parts[1].strip().upper(),
+                "timestamp": parts[2].strip() if len(parts) >= 3 else "",
+            }
     return jsonify(list(seen.values()))
 
 
 @app.route("/api/learned/replies")
 def learned_replies():
-    rows = _read_pipe_file("learned_replies.txt", max_lines=50)
+    rows = datafiles.read_pipe_file("learned_replies.txt", max_lines=50)
     result = []
     for parts in rows:
         if len(parts) >= 4:
@@ -175,43 +198,36 @@ def learned_replies():
 
 
 # ---------------------------------------------------------------------------
-# Error Log API
+# Logs API
 # ---------------------------------------------------------------------------
 
 @app.route("/api/errors")
 def get_errors():
-    max_lines = int(request.args.get("n", 100))
-    lines = _read_log("error.log", max_lines)
-    return jsonify(lines)
+    return jsonify(datafiles.read_log("error.log", _int_param("n", 100)))
 
 
 @app.route("/api/llm-debug-log")
 def get_llm_debug_log():
-    max_lines = int(request.args.get("n", 200))
-    lines = _read_log("llm_debug.log", max_lines)
-    return jsonify(lines)
+    return jsonify(datafiles.read_log("llm_debug.log", _int_param("n", 200)))
+
+
+def _truncate_log(filename: str):
+    path = config.data_file(filename)
+    try:
+        open(path, "w", encoding="utf-8").close()
+    except OSError as e:
+        return jsonify({"ok": False, "error": f"Could not clear {filename}: {e}"}), 500
+    return jsonify({"ok": True})
 
 
 @app.route("/api/errors/clear", methods=["POST"])
 def clear_errors():
-    """Clear error.log contents (truncate file, don't delete)."""
-    path = os.path.join(DATA_DIR, "error.log")
-    try:
-        open(path, "w").close()  # truncate to zero bytes
-    except OSError:
-        pass
-    return jsonify({"ok": True})
+    return _truncate_log("error.log")
 
 
 @app.route("/api/llm-debug-log/clear", methods=["POST"])
 def clear_llm_debug_log():
-    """Clear llm_debug.log contents (truncate file, don't delete)."""
-    path = os.path.join(DATA_DIR, "llm_debug.log")
-    try:
-        open(path, "w").close()
-    except OSError:
-        pass
-    return jsonify({"ok": True})
+    return _truncate_log("llm_debug.log")
 
 
 # ---------------------------------------------------------------------------
@@ -220,17 +236,25 @@ def clear_llm_debug_log():
 
 @app.route("/api/command", methods=["POST"])
 def send_command():
-    data = request.get_json()
-    macro = data.get("macro", "")
-    args = data.get("args", {})
-    if not macro:
+    data = _json_body()
+    macro_name = data.get("macro", "")
+    if not macro_name:
         return jsonify({"error": "macro name required"}), 400
-    cmd_id = bridge.send_command(macro, args)
+
+    clean_args, err = macros.validate_command(macro_name, data.get("args", {}))
+    if err:
+        return jsonify({"error": err}), 400
+
+    cmd_id, send_err = _send_bridge_command(macro_name, clean_args)
+    if send_err:
+        return jsonify({"error": send_err}), 500
     return jsonify({"command_id": cmd_id, "status": "pending"})
 
 
 @app.route("/api/command/<cmd_id>/result")
 def get_command_result(cmd_id):
+    if not _valid_cmd_id(cmd_id):
+        return jsonify({"error": "invalid command id"}), 400
     result = bridge.get_result(cmd_id)
     if result is None:
         return jsonify({"status": "pending"})
@@ -241,19 +265,102 @@ def get_command_result(cmd_id):
 def debug_commands():
     """Debug endpoint: list all files in the commands directory."""
     files = []
-    if os.path.isdir(bridge.COMMANDS_DIR):
-        for f in sorted(os.listdir(bridge.COMMANDS_DIR)):
-            path = os.path.join(bridge.COMMANDS_DIR, f)
+    commands_dir = config.commands_dir()
+    if os.path.isdir(commands_dir):
+        for fname in sorted(os.listdir(commands_dir)):
+            path = os.path.join(commands_dir, fname)
             size = os.path.getsize(path) if os.path.isfile(path) else 0
             preview = ""
             if os.path.isfile(path) and size < 5000:
                 try:
                     with open(path, "r", encoding="utf-8", errors="replace") as fh:
                         preview = fh.read()[:500]
-                except Exception:
+                except OSError:
                     preview = "(unreadable)"
-            files.append({"name": f, "size": size, "preview": preview})
-    return jsonify({"commands_dir": bridge.COMMANDS_DIR, "files": files})
+            files.append({"name": fname, "size": size, "preview": preview})
+    return jsonify({"commands_dir": commands_dir, "files": files})
+
+
+@app.route("/api/bridge/health")
+def bridge_health():
+    """Report whether the Outlook command poller appears to be consuming files."""
+    health = bridge.poller_health()
+    return jsonify({"ok": True, **health})
+
+
+# ---------------------------------------------------------------------------
+# Digest API
+# ---------------------------------------------------------------------------
+
+@app.route("/api/digest")
+def get_digest():
+    digest = datafiles.latest_digest()
+    if digest is None:
+        return jsonify({"ok": False, "error": "No digest generated yet"}), 404
+    return jsonify({"ok": True, "date": digest["date"], "content": digest["content"]})
+
+
+@app.route("/api/digest/generate", methods=["POST"])
+def generate_digest():
+    cmd_id, err = _send_bridge_command("GenerateDailyDigest")
+    if err:
+        return jsonify({"ok": False, "error": err}), 500
+    return jsonify({"ok": True, "command_id": cmd_id, "status": "pending"})
+
+
+# ---------------------------------------------------------------------------
+# Rule Proposals API
+# ---------------------------------------------------------------------------
+
+@app.route("/api/proposals")
+def get_proposals():
+    return jsonify(datafiles.read_proposals())
+
+
+@app.route("/api/proposals/generate", methods=["POST"])
+def generate_proposals():
+    cmd_id, err = _send_bridge_command("ProposeRules")
+    if err:
+        return jsonify({"ok": False, "error": err}), 500
+    return jsonify({"ok": True, "command_id": cmd_id, "status": "pending"})
+
+
+@app.route("/api/proposals/<proposal_id>/approve", methods=["POST"])
+def approve_proposal(proposal_id):
+    if not _valid_cmd_id(proposal_id):
+        return jsonify({"ok": False, "error": "invalid proposal id"}), 400
+    proposal, err, status = datafiles.approve_proposal(proposal_id)
+    if err:
+        return jsonify({"ok": False, "error": err}), status
+
+    # Tell Outlook to pick up the new rule: sender rules reload directly;
+    # subject rules are only re-read on ReinitializeFilter.
+    reload_macro = ("ReloadLearnedSenders" if proposal["type"] == "SENDER"
+                    else "ReinitializeFilter")
+    cmd_id, send_err = _send_bridge_command(reload_macro)
+    response = {"ok": True, "proposal": proposal, "reload_macro": reload_macro}
+    if send_err:
+        return jsonify({**response, "reload_error": send_err})
+    return jsonify({**response, "command_id": cmd_id})
+
+
+@app.route("/api/proposals/<proposal_id>/reject", methods=["POST"])
+def reject_proposal(proposal_id):
+    if not _valid_cmd_id(proposal_id):
+        return jsonify({"ok": False, "error": "invalid proposal id"}), 400
+    proposal, err, status = datafiles.reject_proposal(proposal_id)
+    if err:
+        return jsonify({"ok": False, "error": err}), status
+    return jsonify({"ok": True, "proposal": proposal})
+
+
+# ---------------------------------------------------------------------------
+# Decision Log API
+# ---------------------------------------------------------------------------
+
+@app.route("/api/decisions")
+def get_decisions():
+    return jsonify(datafiles.read_decisions(_int_param("n", 100)))
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +369,7 @@ def debug_commands():
 
 @app.route("/api/chat", methods=["POST"])
 def handle_chat():
-    data = request.get_json()
+    data = _json_body()
     message = data.get("message", "").strip()
     if not message:
         return jsonify({"error": "message required"}), 400
@@ -277,18 +384,18 @@ def handle_chat():
         })
 
     if action["type"] == "help":
-        return jsonify({
-            "type": "help",
-            "label": "Help",
-            "output": chat.help_text(),
-        })
+        return jsonify({"type": "help", "label": "Help", "output": chat.help_text()})
 
     if action["type"] == "api":
         # The client will make the API call itself
         return jsonify(action)
 
     if action["type"] == "setting":
-        settings_manager.write_setting(action["section"], action["key"], action["value"])
+        try:
+            settings_manager.write_setting(
+                action["section"], action["key"], action["value"])
+        except (ValueError, OSError) as e:
+            return jsonify({"type": "error", "output": f"Could not save setting: {e}"})
         return jsonify({
             "type": "setting",
             "label": action["label"],
@@ -296,7 +403,12 @@ def handle_chat():
         })
 
     if action["type"] == "macro":
-        cmd_id = bridge.send_command(action["macro"])
+        if macros.get_macro(action["macro"]) is None:
+            return jsonify({"type": "error",
+                            "output": f"Macro not allowed: {action['macro']}"})
+        cmd_id, err = _send_bridge_command(action["macro"])
+        if err:
+            return jsonify({"type": "error", "output": err})
         return jsonify({
             "type": "macro",
             "label": action["label"],
@@ -316,14 +428,18 @@ def get_status():
     settings = settings_manager.read_all()
     general = settings.get("General", {})
     llm = settings.get("LLM", {})
+    health = bridge.poller_health()
     return jsonify({
         "version": general.get("Version", "unknown"),
-        "settings_path": settings_manager.settings_path(),
+        "settings_path": config.settings_path(),
         "llm_provider": llm.get("Provider", "azure"),
         "llm_enabled": llm.get("UseLLMAPI", "False"),
-        "learned_senders": _count_rules("learned_senders.txt"),
-        "learned_subjects": _count_rules("learned_subjects.txt"),
-        "commands_dir": bridge.COMMANDS_DIR,
+        "learned_senders": datafiles.count_rules("learned_senders.txt"),
+        "learned_subjects": datafiles.count_rules("learned_subjects.txt"),
+        "commands_dir": config.commands_dir(),
+        "bridge_ok": health["poller_responsive"],
+        "stale_commands": health["stale_commands"],
+        "latest_digest": datafiles.latest_digest_date(),
     })
 
 
@@ -333,11 +449,12 @@ def get_status():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    # Clean up stale result files from previous sessions
-    cleaned = bridge.cleanup_old_results(max_age_seconds=60)
+    cleaned = bridge.cleanup_old_files()  # .json + .result older than 1 hour
     if cleaned:
-        print(f"Cleaned up {cleaned} stale result file(s)")
-    print(f"Outlook Email Agent Web UI")
+        print(f"Cleaned up {cleaned} stale command/result file(s)")
+    auth.get_token()  # ensure the token file exists before first request
+    print("Outlook Email Agent Web UI")
     print(f"Open: http://localhost:{port}")
-    print(f"Settings: {settings_manager.settings_path()}")
+    print(f"Settings: {config.settings_path()}")
+    print(f"Auth token file: {config.token_path()}")
     app.run(debug=False, port=port, host="127.0.0.1")

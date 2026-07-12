@@ -1,8 +1,14 @@
 '===============================================================================
-' BatchFilter.bas - Batch Processing Functions v2.0
+' BatchFilter.bas - Batch Processing Functions v3.0
 '===============================================================================
 ' This module contains functions for filtering existing emails in bulk,
-' diagnostics, migration helpers, and the dashboard launcher.
+' diagnostics, migration helpers, and server rule import/export.
+'
+' Structure: each interactive macro (MsgBox confirmations + result dialog) is a
+' thin wrapper around a headless Public Function <Name>Core() As String that
+' never shows UI, returns a plain-text summary with real counts, and returns
+' a string starting with "ERROR: " on failure. Core functions are safe to call
+' from the Web UI command bridge.
 '
 ' All pattern/setting references use Runtime* variables from Config.bas,
 ' loaded from settings.ini by LoadAllSettings at startup.
@@ -24,6 +30,9 @@ Public Sub FilterExistingDryRun()
     Dim decision As String
     Dim icon As String
     Dim processCount As Long
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.FilterExistingDryRun"
 
     Set myFolder = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox)
     Set myItems = myFolder.Items
@@ -90,22 +99,26 @@ Public Sub FilterExistingDryRun()
     MsgBox "Dry run complete!" & vbCrLf & vbCrLf & _
            "Check Immediate Window (Ctrl+G in VBA Editor) for results." & vbCrLf & vbCrLf & _
            "Previewed: " & processCount & " emails", vbInformation, "Email Filter Dry Run"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "FilterExistingDryRun", Err.Number, Err.Description
+    Resume PROC_EXIT
 End Sub
 
 '-------------------------------------------------------------------------------
 ' FILTER EXISTING EMAILS
 '-------------------------------------------------------------------------------
 
-' Filter all existing emails in Inbox
+' Filter all existing emails in Inbox (interactive wrapper)
 Public Sub FilterExistingEmails()
-    Dim myFolder As Outlook.Folder
-    Dim myItems As Outlook.Items
-    Dim mail As Outlook.MailItem
-    Dim i As Long
-    Dim stats As Object
-    Dim decision As String
-    Dim totalCount As Long
     Dim response As VbMsgBoxResult
+    Dim resultText As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.FilterExistingEmails"
 
     ' Confirm before proceeding
     response = MsgBox("This will filter ALL emails in your Inbox." & vbCrLf & vbCrLf & _
@@ -119,8 +132,33 @@ Public Sub FilterExistingEmails()
 
     If response <> vbYes Then
         MsgBox "Filtering cancelled.", vbInformation
-        Exit Sub
+        GoTo PROC_EXIT
     End If
+
+    resultText = FilterExistingEmailsCore()
+    MsgBox resultText, vbInformation, "Email Filter Complete"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "FilterExistingEmails", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Headless core: filter all existing emails in Inbox. No UI.
+Public Function FilterExistingEmailsCore() As String
+    Dim myFolder As Outlook.Folder
+    Dim myItems As Outlook.Items
+    Dim mail As Outlook.MailItem
+    Dim i As Long
+    Dim stats As Object
+    Dim decision As String
+    Dim totalCount As Long
+    Dim processedCount As Long
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.FilterExistingEmailsCore"
 
     ' Ensure learned caches are loaded before classifying
     If RuntimeEnableSelfImproving Then
@@ -136,6 +174,7 @@ Public Sub FilterExistingEmails()
     myItems.Sort "[ReceivedTime]", True  ' Newest first
 
     totalCount = myItems.Count
+    processedCount = 0
     LogMessage "INFO", "Starting filter of " & totalCount & " items in Inbox"
 
     ' Process from end to beginning (CRITICAL for deletions)
@@ -145,28 +184,39 @@ Public Sub FilterExistingEmails()
 
             decision = ClassifyEmail(mail)
             ExecuteAction mail, decision, stats
+            processedCount = processedCount + 1
 
-            ' Progress indicator
-            If (totalCount - i + 1) Mod RuntimeProgressInterval = 0 Then
-                LogMessage "INFO", "Progress: " & (totalCount - i + 1) & " / " & totalCount
+            ' Progress indicator (log only - no UI in Core)
+            If processedCount Mod RuntimeProgressInterval = 0 Then
+                LogMessage "INFO", "Progress: " & processedCount & " / " & totalCount
                 DoEvents  ' Allow UI to update
             End If
         End If
     Next i
 
     LogMessage "INFO", "Filtering complete"
-    MsgBox FormatStats(stats), vbInformation, "Email Filter Complete"
-End Sub
+    FilterExistingEmailsCore = SummarizeStats(stats, processedCount)
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "FilterExistingEmailsCore", Err.Number, Err.Description
+    FilterExistingEmailsCore = "ERROR: " & Err.Description
+    Resume PROC_EXIT
+End Function
 
 '-------------------------------------------------------------------------------
 ' FILTER MULTIPLE FOLDERS
 '-------------------------------------------------------------------------------
 
-' Filter Inbox, Other folder, and any mounted PST archives
+' Filter Inbox, Other folder, and any mounted PST archives (interactive wrapper)
 Public Sub FilterAllFolders()
-    Dim ns As Outlook.NameSpace
-    Dim store As Outlook.Store
     Dim response As VbMsgBoxResult
+    Dim resultText As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.FilterAllFolders"
 
     response = MsgBox("This will filter emails in:" & vbCrLf & _
                       "  - Inbox" & vbCrLf & _
@@ -174,50 +224,126 @@ Public Sub FilterAllFolders()
                       "  - Any mounted PST archives" & vbCrLf & vbCrLf & _
                       "Continue?", vbYesNo + vbExclamation, "Email Filter - All Folders")
 
-    If response <> vbYes Then Exit Sub
+    If response <> vbYes Then GoTo PROC_EXIT
+
+    resultText = FilterAllFoldersCore()
+    MsgBox resultText, vbInformation, "Email Filter Complete"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "FilterAllFolders", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Headless core: filter Inbox, Other folder, and mounted PST archives. No UI.
+Public Function FilterAllFoldersCore() As String
+    Dim ns As Outlook.NameSpace
+    Dim store As Outlook.Store
+    Dim otherFolder As Outlook.Folder
+    Dim stats As Object
+    Dim processedCount As Long
+    Dim folderCount As Long
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.FilterAllFoldersCore"
+
+    ' Ensure learned caches are loaded before classifying
+    If RuntimeEnableSelfImproving Then
+        LoadLearnedSenders
+        LoadLearnedSubjects
+    End If
 
     Set ns = Application.GetNamespace("MAPI")
+    Set stats = CreateStatsDict()
+    processedCount = 0
+    folderCount = 0
 
     ' 1. Filter default Inbox
     LogMessage "INFO", "Filtering default Inbox..."
-    FilterFolder ns.GetDefaultFolder(olFolderInbox)
+    processedCount = processedCount + FilterFolderIntoStats(ns.GetDefaultFolder(olFolderInbox), stats)
+    folderCount = folderCount + 1
 
     ' 2. Filter "Other" folder (Focused Inbox feature)
+    Set otherFolder = Nothing
     On Error Resume Next
-    Dim otherFolder As Outlook.Folder
     Set otherFolder = ns.GetDefaultFolder(olFolderInbox).Folders("Other")
+    On Error GoTo PROC_ERR
     If Not otherFolder Is Nothing Then
         LogMessage "INFO", "Filtering 'Other' folder..."
-        FilterFolder otherFolder
+        processedCount = processedCount + FilterFolderIntoStats(otherFolder, stats)
+        folderCount = folderCount + 1
     End If
-    On Error GoTo 0
 
     ' 3. Filter mounted PST archives
+    Dim pstInbox As Outlook.Folder
     For Each store In ns.Stores
         If store.ExchangeStoreType = olNotExchange Then
             ' This is a PST file
             LogMessage "INFO", "Filtering PST: " & store.DisplayName
+            Set pstInbox = Nothing
             On Error Resume Next
-            FilterFolder store.GetDefaultFolder(olFolderInbox)
-            On Error GoTo 0
+            Set pstInbox = store.GetDefaultFolder(olFolderInbox)
+            On Error GoTo PROC_ERR
+            If Not pstInbox Is Nothing Then
+                processedCount = processedCount + FilterFolderIntoStats(pstInbox, stats)
+                folderCount = folderCount + 1
+            Else
+                LogMessage "WARN", "PST has no Inbox folder: " & store.DisplayName
+            End If
         End If
     Next store
 
-    MsgBox "All folders processed!", vbInformation, "Email Filter Complete"
+    FilterAllFoldersCore = "Processed " & folderCount & " folder(s). " & _
+                           SummarizeStats(stats, processedCount)
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "FilterAllFoldersCore", Err.Number, Err.Description
+    FilterAllFoldersCore = "ERROR: " & Err.Description
+    Resume PROC_EXIT
+End Function
+
+' Filter a specific folder (kept for backwards compatibility - logs its own stats)
+Public Sub FilterFolder(ByVal folder As Outlook.Folder)
+    Dim stats As Object
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.FilterFolder"
+
+    If folder Is Nothing Then GoTo PROC_EXIT
+
+    Set stats = CreateStatsDict()
+    FilterFolderIntoStats folder, stats
+    LogMessage "INFO", "Folder complete: " & FormatStats(stats)
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "FilterFolder", Err.Number, Err.Description
+    Resume PROC_EXIT
 End Sub
 
-' Filter a specific folder
-Public Sub FilterFolder(ByVal folder As Outlook.Folder)
+' Filter one folder, accumulating into a shared stats dict. Returns emails processed.
+Private Function FilterFolderIntoStats(ByVal folder As Outlook.Folder, ByVal stats As Object) As Long
     Dim myItems As Outlook.Items
     Dim mail As Outlook.MailItem
     Dim i As Long
-    Dim stats As Object
     Dim decision As String
+    Dim processedCount As Long
 
-    If folder Is Nothing Then Exit Sub
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.FilterFolderIntoStats"
 
-    Set stats = CreateStatsDict()
+    FilterFolderIntoStats = 0
+    If folder Is Nothing Then GoTo PROC_EXIT
+
     Set myItems = folder.Items
+    processedCount = 0
 
     LogMessage "INFO", "Filtering folder: " & folder.Name & " (" & myItems.Count & " items)"
 
@@ -227,18 +353,92 @@ Public Sub FilterFolder(ByVal folder As Outlook.Folder)
 
             decision = ClassifyEmail(mail)
             ExecuteAction mail, decision, stats
+            processedCount = processedCount + 1
+
+            If processedCount Mod RuntimeProgressInterval = 0 Then
+                LogMessage "INFO", "Progress in '" & folder.Name & "': " & processedCount
+                DoEvents
+            End If
         End If
     Next i
 
-    LogMessage "INFO", "Folder complete: " & FormatStats(stats)
-End Sub
+    FilterFolderIntoStats = processedCount
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "FilterFolderIntoStats", Err.Number, Err.Description
+    FilterFolderIntoStats = processedCount
+    Resume PROC_EXIT
+End Function
 
 '-------------------------------------------------------------------------------
 ' FILTER BY DATE RANGE
 '-------------------------------------------------------------------------------
 
-' Filter emails received within a date range
+' Filter emails received within a date range (interactive wrapper)
 Public Sub FilterByDateRange(ByVal startDate As Date, ByVal endDate As Date)
+    Dim resultText As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.FilterByDateRange"
+
+    resultText = FilterDateRangeCore(startDate, endDate)
+    MsgBox resultText, vbInformation, "Date Range Filter Complete"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "FilterByDateRange", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Filter emails from the last N days (interactive wrapper)
+Public Sub FilterLastNDays(ByVal days As Integer)
+    Dim resultText As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.FilterLastNDays"
+
+    resultText = FilterLastNDaysCore(CLng(days))
+    MsgBox resultText, vbInformation, "Filter Last " & days & " Days Complete"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "FilterLastNDays", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Headless core: filter emails from the last N days. No UI.
+Public Function FilterLastNDaysCore(ByVal days As Long) As String
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.FilterLastNDaysCore"
+
+    If days < 1 Then
+        FilterLastNDaysCore = "ERROR: days must be at least 1"
+        GoTo PROC_EXIT
+    End If
+
+    FilterLastNDaysCore = FilterDateRangeCore(DateAdd("d", -days, Date), Date)
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "FilterLastNDaysCore", Err.Number, Err.Description
+    FilterLastNDaysCore = "ERROR: " & Err.Description
+    Resume PROC_EXIT
+End Function
+
+' Shared headless date-range filter used by FilterByDateRange and FilterLastNDaysCore.
+' Uses locale-safe date literals ("ddddd h:nn AMPM" = VBA locale short date + time,
+' the format Microsoft recommends for Jet Restrict) and a strict upper bound at
+' midnight of the day AFTER endDate (avoids the old <= endDate + 1 off-by-one).
+Private Function FilterDateRangeCore(ByVal startDate As Date, ByVal endDate As Date) As String
     Dim myFolder As Outlook.Folder
     Dim myItems As Outlook.Items
     Dim filteredItems As Outlook.Items
@@ -246,117 +446,259 @@ Public Sub FilterByDateRange(ByVal startDate As Date, ByVal endDate As Date)
     Dim i As Long
     Dim stats As Object
     Dim filter As String
+    Dim endDatePlusOne As Date
+    Dim processedCount As Long
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.FilterDateRangeCore"
+
+    ' Ensure learned caches are loaded before classifying
+    If RuntimeEnableSelfImproving Then
+        LoadLearnedSenders
+        LoadLearnedSubjects
+    End If
 
     Set stats = CreateStatsDict()
     Set myFolder = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox)
     Set myItems = myFolder.Items
 
-    ' Build date filter
-    filter = "[ReceivedTime] >= '" & Format(startDate, "mm/dd/yyyy") & "' AND " & _
-             "[ReceivedTime] <= '" & Format(endDate + 1, "mm/dd/yyyy") & "'"
+    ' Build locale-safe date filter: [start 00:00, day-after-end 00:00)
+    endDatePlusOne = DateAdd("d", 1, DateValue(endDate))
+    filter = "[ReceivedTime] >= '" & Format(DateValue(startDate), "ddddd h:nn AMPM") & "' AND " & _
+             "[ReceivedTime] < '" & Format(endDatePlusOne, "ddddd h:nn AMPM") & "'"
 
     Set filteredItems = myItems.Restrict(filter)
 
     LogMessage "INFO", "Filtering " & filteredItems.Count & " emails from " & _
-               Format(startDate, "mm/dd/yyyy") & " to " & Format(endDate, "mm/dd/yyyy")
+               Format(startDate, "yyyy-mm-dd") & " to " & Format(endDate, "yyyy-mm-dd")
 
+    processedCount = 0
     For i = filteredItems.Count To 1 Step -1
         If TypeOf filteredItems(i) Is Outlook.MailItem Then
             Set mail = filteredItems(i)
             ExecuteAction mail, ClassifyEmail(mail), stats
+            processedCount = processedCount + 1
+
+            If processedCount Mod RuntimeProgressInterval = 0 Then
+                LogMessage "INFO", "Progress: " & processedCount
+                DoEvents
+            End If
         End If
     Next i
 
-    MsgBox FormatStats(stats), vbInformation, "Date Range Filter Complete"
-End Sub
+    FilterDateRangeCore = "Date range " & Format(startDate, "yyyy-mm-dd") & " to " & _
+                          Format(endDate, "yyyy-mm-dd") & ". " & _
+                          SummarizeStats(stats, processedCount)
 
-' Filter emails from the last N days
-Public Sub FilterLastNDays(ByVal days As Integer)
-    FilterByDateRange DateAdd("d", -days, Date), Date
-End Sub
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "FilterDateRangeCore", Err.Number, Err.Description
+    FilterDateRangeCore = "ERROR: " & Err.Description
+    Resume PROC_EXIT
+End Function
 
 '-------------------------------------------------------------------------------
 ' FILTER BY SENDER PATTERN (BULK DELETE)
 '-------------------------------------------------------------------------------
 
-' Delete all emails from senders matching a pattern
+' Delete all emails from senders matching a pattern (interactive wrapper)
 Public Sub BulkDeleteBySender(ByVal senderPattern As String)
+    Dim response As VbMsgBoxResult
+    Dim resultText As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.BulkDeleteBySender"
+
+    response = MsgBox("Delete ALL Inbox emails whose sender address or name contains:" & vbCrLf & vbCrLf & _
+                      "  " & senderPattern & vbCrLf & vbCrLf & _
+                      "Delete all?", vbYesNo + vbExclamation, "Bulk Delete")
+
+    If response <> vbYes Then GoTo PROC_EXIT
+
+    resultText = BulkDeleteBySenderCore(senderPattern)
+    MsgBox resultText, vbInformation, "Bulk Delete Complete"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "BulkDeleteBySender", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Headless core: delete all Inbox emails from senders matching a pattern. No UI.
+' Manual scan (no Restrict): Jet "Like" is unsupported by Items.Restrict, and
+' [SenderEmailAddress] holds raw /O= Exchange DNs. Matches against the resolved
+' SMTP address (GetSenderEmail) and the display name instead.
+Public Function BulkDeleteBySenderCore(ByVal senderPattern As String) As String
     Dim myFolder As Outlook.Folder
     Dim myItems As Outlook.Items
-    Dim filteredItems As Outlook.Items
     Dim mail As Outlook.MailItem
     Dim i As Long
     Dim deleteCount As Long
-    Dim response As VbMsgBoxResult
+    Dim scannedCount As Long
+    Dim senderName As String
+    Dim subject As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.BulkDeleteBySenderCore"
+
+    If Len(Trim(senderPattern)) < 3 Then
+        BulkDeleteBySenderCore = "ERROR: pattern too short"
+        GoTo PROC_EXIT
+    End If
+    senderPattern = Trim(senderPattern)
 
     Set myFolder = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox)
     Set myItems = myFolder.Items
 
-    ' Use Restrict for faster filtering
-    Set filteredItems = myItems.Restrict("[SenderEmailAddress] Like '%" & senderPattern & "%'")
-
-    If filteredItems.Count = 0 Then
-        MsgBox "No emails found matching pattern: " & senderPattern, vbInformation
-        Exit Sub
-    End If
-
-    response = MsgBox("Found " & filteredItems.Count & " emails from senders matching:" & vbCrLf & _
-                      senderPattern & vbCrLf & vbCrLf & _
-                      "Delete all?", vbYesNo + vbExclamation, "Bulk Delete")
-
-    If response <> vbYes Then Exit Sub
-
     deleteCount = 0
-    For i = filteredItems.Count To 1 Step -1
-        If TypeOf filteredItems.Item(i) Is Outlook.MailItem Then
-            filteredItems.Item(i).Delete
-            deleteCount = deleteCount + 1
+    scannedCount = 0
+
+    ' Reverse iteration - deletions invalidate indices
+    For i = myItems.Count To 1 Step -1
+        If TypeOf myItems(i) Is Outlook.MailItem Then
+            Set mail = myItems(i)
+            scannedCount = scannedCount + 1
+
+            If InStr(1, GetSenderEmail(mail), senderPattern, vbTextCompare) > 0 _
+               Or InStr(1, mail.senderName, senderPattern, vbTextCompare) > 0 Then
+                ' Pre-capture BEFORE delete (object becomes invalid after)
+                senderName = mail.senderName
+                subject = mail.subject
+                mail.Delete
+                deleteCount = deleteCount + 1
+                LogActionDirect senderName, subject, "DELETED (bulk: " & senderPattern & ")"
+            End If
+
+            If scannedCount Mod RuntimeProgressInterval = 0 Then
+                LogMessage "INFO", "BulkDelete progress: " & scannedCount & " scanned, " & deleteCount & " deleted"
+                DoEvents
+            End If
         End If
     Next i
 
-    MsgBox "Deleted " & deleteCount & " emails.", vbInformation, "Bulk Delete Complete"
-End Sub
+    LogMessage "INFO", "BulkDeleteBySender '" & senderPattern & "': scanned " & scannedCount & ", deleted " & deleteCount
+
+    If deleteCount = 0 Then
+        BulkDeleteBySenderCore = "No emails found matching pattern: " & senderPattern & _
+                                 " (scanned " & scannedCount & " emails)."
+    Else
+        BulkDeleteBySenderCore = "Deleted " & deleteCount & " of " & scannedCount & _
+                                 " emails matching '" & senderPattern & "'."
+    End If
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "BulkDeleteBySenderCore", Err.Number, Err.Description
+    BulkDeleteBySenderCore = "ERROR: " & Err.Description
+    Resume PROC_EXIT
+End Function
 
 '-------------------------------------------------------------------------------
 ' MOVE PROTECTED SOURCES (BULK)
 '-------------------------------------------------------------------------------
 
-' Move all emails from protected domains to the Protected folder
+' Move all emails from protected domains to the Protected folder (interactive wrapper)
 Public Sub MoveProtectedSources()
+    Dim resultText As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.MoveProtectedSources"
+
+    resultText = MoveProtectedSourcesCore()
+    MsgBox resultText, vbInformation, "Protected Sources Moved"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "MoveProtectedSources", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Headless core: move all Inbox emails from protected domains to Protected folder. No UI.
+Public Function MoveProtectedSourcesCore() As String
     Dim myFolder As Outlook.Folder
     Dim myItems As Outlook.Items
     Dim mail As Outlook.MailItem
     Dim i As Long
     Dim moveCount As Long
     Dim domain As String
+    Dim senderName As String
+    Dim subject As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.MoveProtectedSourcesCore"
 
     Set myFolder = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox)
     Set myItems = myFolder.Items
 
     moveCount = 0
 
+    ' Reverse iteration - moves invalidate indices
     For i = myItems.Count To 1 Step -1
         If TypeOf myItems(i) Is Outlook.MailItem Then
             Set mail = myItems(i)
             domain = GetDomain(GetSenderEmail(mail))
 
             If ContainsAny(domain, RuntimeProtectedDomains) Then
+                ' Pre-capture BEFORE move (object becomes invalid after)
+                senderName = mail.senderName
+                subject = mail.subject
                 mail.Move GetOrCreateFolder(RuntimeFolderProtected)
                 moveCount = moveCount + 1
+                LogActionDirect senderName, subject, "MOVED to " & RuntimeFolderProtected & " (bulk protected)"
+
+                If moveCount Mod RuntimeProgressInterval = 0 Then
+                    LogMessage "INFO", "MoveProtectedSources progress: " & moveCount & " moved"
+                    DoEvents
+                End If
             End If
         End If
     Next i
 
-    MsgBox "Moved " & moveCount & " emails to '" & RuntimeFolderProtected & "' folder.", _
-           vbInformation, "Protected Sources Moved"
-End Sub
+    LogMessage "INFO", "MoveProtectedSources complete: " & moveCount & " moved"
+    MoveProtectedSourcesCore = "Moved " & moveCount & " emails to '" & RuntimeFolderProtected & "' folder."
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "MoveProtectedSourcesCore", Err.Number, Err.Description
+    MoveProtectedSourcesCore = "ERROR: " & Err.Description
+    Resume PROC_EXIT
+End Function
 
 '-------------------------------------------------------------------------------
 ' STATISTICS AND REPORTING
 '-------------------------------------------------------------------------------
 
-' Generate a classification report without taking action
+' Generate a classification report without taking action (interactive wrapper)
 Public Sub GenerateClassificationReport()
+    Dim resultText As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.GenerateClassificationReport"
+
+    resultText = GenerateClassificationReportCore()
+    MsgBox resultText, vbInformation, "Classification Report"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "GenerateClassificationReport", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Headless core: classification report without taking action. Returns report text.
+' NOTE: classify-only - must NOT record decisions (no ExecuteAction, no RecordDecision).
+Public Function GenerateClassificationReportCore() As String
     Dim myFolder As Outlook.Folder
     Dim myItems As Outlook.Items
     Dim mail As Outlook.MailItem
@@ -365,6 +707,12 @@ Public Sub GenerateClassificationReport()
     Dim decision As String
     Dim mailCount As Long
     Dim otherCount As Long
+    Dim learnedCount As Long
+    Dim learnedSubjectCount As Long
+    Dim learnedInfo As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.GenerateClassificationReportCore"
 
     Set stats = CreateStatsDict()
     Set myFolder = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox)
@@ -372,8 +720,6 @@ Public Sub GenerateClassificationReport()
 
     mailCount = 0
     otherCount = 0
-    Dim learnedCount As Long
-    Dim learnedSubjectCount As Long
     learnedCount = 0
     learnedSubjectCount = 0
 
@@ -408,7 +754,6 @@ Public Sub GenerateClassificationReport()
         End If
     Next i
 
-    Dim learnedInfo As String
     If RuntimeEnableSelfImproving Then
         learnedInfo = vbCrLf & "Learned Rules:" & vbCrLf & _
                       "  Matched by learned sender rules: " & learnedCount & vbCrLf & _
@@ -419,7 +764,8 @@ Public Sub GenerateClassificationReport()
         learnedInfo = ""
     End If
 
-    MsgBox "Classification Report (No Actions Taken)" & vbCrLf & vbCrLf & _
+    GenerateClassificationReportCore = _
+           "Classification Report (No Actions Taken)" & vbCrLf & vbCrLf & _
            "Total items in folder: " & myItems.Count & vbCrLf & _
            "  - Emails (MailItems): " & mailCount & vbCrLf & _
            "  - Other (meetings, etc.): " & otherCount & vbCrLf & vbCrLf & _
@@ -429,57 +775,119 @@ Public Sub GenerateClassificationReport()
            "  Would MOVE to " & RuntimeFolderReview & ": " & stats("REVIEW") & vbCrLf & _
            "  Would KEEP: " & stats("KEEP") & vbCrLf & _
            learnedInfo & vbCrLf & _
-           "Verification: " & (stats("DELETE") + stats("MOVE_II") + stats("REVIEW") + stats("KEEP")) & " = " & mailCount, _
-           vbInformation, "Classification Report"
-End Sub
+           "Verification: " & (stats("DELETE") + stats("MOVE_II") + stats("REVIEW") + stats("KEEP")) & " = " & mailCount
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "GenerateClassificationReportCore", Err.Number, Err.Description
+    GenerateClassificationReportCore = "ERROR: " & Err.Description
+    Resume PROC_EXIT
+End Function
 
 '-------------------------------------------------------------------------------
 ' UNDO HELPERS
 '-------------------------------------------------------------------------------
 
-' Move emails from Review folder back to Inbox
+' Move emails from Review folder back to Inbox (interactive wrapper)
 Public Sub RestoreFromReview()
     Dim reviewFolder As Outlook.Folder
-    Dim inbox As Outlook.Folder
-    Dim myItems As Outlook.Items
-    Dim mail As Outlook.MailItem
-    Dim i As Long
-    Dim restoreCount As Long
+    Dim itemCount As Long
     Dim response As VbMsgBoxResult
+    Dim resultText As String
 
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.RestoreFromReview"
+
+    ' Peek at the folder (read-only) so the confirmation can show a count
+    Set reviewFolder = Nothing
     On Error Resume Next
     Set reviewFolder = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox).Folders(RuntimeFolderReview)
-    On Error GoTo 0
+    On Error GoTo PROC_ERR
 
     If reviewFolder Is Nothing Then
         MsgBox "'" & RuntimeFolderReview & "' folder not found.", vbInformation
-        Exit Sub
+        GoTo PROC_EXIT
+    End If
+
+    itemCount = reviewFolder.Items.Count
+    If itemCount = 0 Then
+        MsgBox "'" & RuntimeFolderReview & "' folder is empty.", vbInformation
+        GoTo PROC_EXIT
+    End If
+
+    response = MsgBox("Move " & itemCount & " emails from '" & RuntimeFolderReview & "' back to Inbox?", _
+                      vbYesNo + vbQuestion, "Restore from Review")
+
+    If response <> vbYes Then GoTo PROC_EXIT
+
+    resultText = RestoreFromReviewCore()
+    MsgBox resultText, vbInformation, "Restore Complete"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "RestoreFromReview", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Headless core: move all emails from Review folder back to Inbox. No UI.
+Public Function RestoreFromReviewCore() As String
+    Dim reviewFolder As Outlook.Folder
+    Dim inbox As Outlook.Folder
+    Dim myItems As Outlook.Items
+    Dim i As Long
+    Dim restoreCount As Long
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.RestoreFromReviewCore"
+
+    Set reviewFolder = Nothing
+    On Error Resume Next
+    Set reviewFolder = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox).Folders(RuntimeFolderReview)
+    On Error GoTo PROC_ERR
+
+    If reviewFolder Is Nothing Then
+        RestoreFromReviewCore = "ERROR: '" & RuntimeFolderReview & "' folder not found"
+        GoTo PROC_EXIT
     End If
 
     Set myItems = reviewFolder.Items
 
     If myItems.Count = 0 Then
-        MsgBox "'" & RuntimeFolderReview & "' folder is empty.", vbInformation
-        Exit Sub
+        RestoreFromReviewCore = "'" & RuntimeFolderReview & "' folder is empty. Nothing restored."
+        GoTo PROC_EXIT
     End If
-
-    response = MsgBox("Move " & myItems.Count & " emails from '" & RuntimeFolderReview & "' back to Inbox?", _
-                      vbYesNo + vbQuestion, "Restore from Review")
-
-    If response <> vbYes Then Exit Sub
 
     Set inbox = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox)
     restoreCount = 0
 
+    ' Reverse iteration - moves invalidate indices
     For i = myItems.Count To 1 Step -1
         If TypeOf myItems(i) Is Outlook.MailItem Then
             myItems(i).Move inbox
             restoreCount = restoreCount + 1
+
+            If restoreCount Mod RuntimeProgressInterval = 0 Then
+                LogMessage "INFO", "RestoreFromReview progress: " & restoreCount & " restored"
+                DoEvents
+            End If
         End If
     Next i
 
-    MsgBox "Restored " & restoreCount & " emails to Inbox.", vbInformation, "Restore Complete"
-End Sub
+    LogMessage "INFO", "RestoreFromReview complete: " & restoreCount & " restored"
+    RestoreFromReviewCore = "Restored " & restoreCount & " emails from '" & RuntimeFolderReview & "' to Inbox."
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "RestoreFromReviewCore", Err.Number, Err.Description
+    RestoreFromReviewCore = "ERROR: " & Err.Description
+    Resume PROC_EXIT
+End Function
 
 '-------------------------------------------------------------------------------
 ' LEARNED SENDERS DIAGNOSTICS
@@ -487,22 +895,26 @@ End Sub
 
 ' Display learned sender rules count and file location
 Public Sub ShowLearnedSenders()
+    Dim filePath As String
+    Dim fso As Object
+    Dim fileInfo As String
+    Dim fileSize As Long
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.ShowLearnedSenders"
+
     If Not RuntimeEnableSelfImproving Then
         MsgBox "Self-improving filter is disabled." & vbCrLf & _
                "Set EnableSelfImproving=True in settings.ini.", _
                vbInformation, "Learned Senders"
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
-    Dim filePath As String
     filePath = GetLearnedSendersFilePath()
 
-    Dim fso As Object
     Set fso = CreateObject("Scripting.FileSystemObject")
 
-    Dim fileInfo As String
     If fso.FileExists(filePath) Then
-        Dim fileSize As Long
         fileSize = fso.GetFile(filePath).Size
         fileInfo = "File size: " & fileSize & " bytes"
     Else
@@ -521,27 +933,17 @@ Public Sub ShowLearnedSenders()
            "  ReloadLearnedSenders - Force reload from file" & vbCrLf & _
            "  ShowLearnedSenders   - This dialog", _
            vbInformation, "Learned Senders"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "ShowLearnedSenders", Err.Number, Err.Description
+    Resume PROC_EXIT
 End Sub
 
 ' Dump all learned sender rules to the Immediate Window for review
 Public Sub ShowLearnedSendersList()
-    If Not RuntimeEnableSelfImproving Then
-        MsgBox "Self-improving filter is disabled.", vbInformation, "Learned Senders"
-        Exit Sub
-    End If
-
-    ' Force reload to get freshest data
-    LoadLearnedSenders True
-
-    Dim count As Long
-    count = GetLearnedSendersCount()
-
-    If count = 0 Then
-        MsgBox "No learned sender rules found.", vbInformation, "Learned Senders"
-        Exit Sub
-    End If
-
-    ' Read the file directly to show all entries with timestamps
     Dim filePath As String
     Dim fso As Object
     Dim ts As Object
@@ -551,21 +953,41 @@ Public Sub ShowLearnedSendersList()
     Dim lineNum As Long
     Dim keepCount As Long
     Dim deleteCount As Long
+    Dim count As Long
+    Dim action As String
 
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.ShowLearnedSendersList"
+
+    If Not RuntimeEnableSelfImproving Then
+        MsgBox "Self-improving filter is disabled.", vbInformation, "Learned Senders"
+        GoTo PROC_EXIT
+    End If
+
+    ' Force reload to get freshest data
+    LoadLearnedSenders True
+
+    count = GetLearnedSendersCount()
+
+    If count = 0 Then
+        MsgBox "No learned sender rules found.", vbInformation, "Learned Senders"
+        GoTo PROC_EXIT
+    End If
+
+    ' Read the file directly to show all entries with timestamps
     filePath = GetLearnedSendersFilePath()
 
     Set fso = CreateObject("Scripting.FileSystemObject")
     If Not fso.FileExists(filePath) Then
         MsgBox "Learned senders file not found at:" & vbCrLf & filePath, vbExclamation
         Set fso = Nothing
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     output = "=== LEARNED SENDER RULES ===" & vbCrLf
     output = output & "File: " & filePath & vbCrLf
     output = output & String(60, "=") & vbCrLf & vbCrLf
 
-    Dim action As String
     keepCount = 0
     deleteCount = 0
     lineNum = 0
@@ -612,94 +1034,100 @@ Public Sub ShowLearnedSendersList()
            "Unique rules in cache: " & count & vbCrLf & _
            "KEEP: " & keepCount & "  |  DELETE: " & deleteCount, _
            vbInformation, "Learned Senders List"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "ShowLearnedSendersList", Err.Number, Err.Description
+    ' Safe cleanup: after On Error Resume Next the error state is cleared,
+    ' so jump with GoTo (Resume would raise "Resume without error")
+    On Error Resume Next
+    If Not ts Is Nothing Then ts.Close
+    Set ts = Nothing
+    Set fso = Nothing
+    GoTo PROC_EXIT
 End Sub
 
-' Remove duplicate entries from the learned senders file and show results
+' Remove duplicate entries from the learned senders file (interactive wrapper)
 Public Sub CleanLearnedSendersFile()
+    Dim resultText As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.CleanLearnedSendersFile"
+
+    resultText = CleanLearnedSendersFileCore()
+    MsgBox resultText, vbInformation, "Clean Learned Senders"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "CleanLearnedSendersFile", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Headless core: deduplicate the learned senders file. No UI.
+' Counts only rule lines (non-comment, non-blank) so "removed" is accurate.
+Public Function CleanLearnedSendersFileCore() As String
+    Dim beforeRules As Long
+    Dim afterRules As Long
+    Dim removed As Long
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.CleanLearnedSendersFileCore"
+
     If Not RuntimeEnableSelfImproving Then
-        MsgBox "Self-improving filter is disabled.", vbInformation, "Learned Senders"
-        Exit Sub
+        CleanLearnedSendersFileCore = "ERROR: self-improving filter is disabled (set EnableSelfImproving=True in settings.ini)"
+        GoTo PROC_EXIT
     End If
 
-    Dim countBefore As Long
-    countBefore = GetLearnedSendersCount()
-
-    ' Read line count before dedup
-    Dim filePath As String
-    Dim fso As Object
-    Dim ts As Object
-    Dim linesBefore As Long
-
-    filePath = GetLearnedSendersFilePath()
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    If fso.FileExists(filePath) Then
-        Set ts = fso.OpenTextFile(filePath, 1)
-        linesBefore = 0
-        Do While Not ts.AtEndOfStream
-            ts.ReadLine
-            linesBefore = linesBefore + 1
-        Loop
-        ts.Close
-        Set ts = Nothing
-    Else
-        linesBefore = 0
-    End If
-    Set fso = Nothing
+    beforeRules = CountRuleLines(GetLearnedSendersFilePath())
 
     ' Run deduplication
     DeduplicateLearnedSenders
 
-    Dim countAfter As Long
-    countAfter = GetLearnedSendersCount()
-    Dim removed As Long
-    removed = linesBefore - countAfter
+    afterRules = CountRuleLines(GetLearnedSendersFilePath())
+    removed = beforeRules - afterRules
+    If removed < 0 Then removed = 0
 
     If removed = 0 Then
-        MsgBox "No duplicates found." & vbCrLf & vbCrLf & _
-               "File has " & linesBefore & " entries, all unique.", _
-               vbInformation, "Clean Learned Senders"
+        CleanLearnedSendersFileCore = "No duplicates found. File has " & afterRules & " rule entries, all unique."
     Else
-        MsgBox "Deduplication complete!" & vbCrLf & vbCrLf & _
-               "Lines before: " & linesBefore & vbCrLf & _
-               "Lines after:  " & countAfter & vbCrLf & _
-               "Removed:      " & removed & " duplicate(s)" & vbCrLf & vbCrLf & _
-               "Unique rules: " & countAfter, _
-               vbInformation, "Clean Learned Senders"
+        CleanLearnedSendersFileCore = "Deduplication complete: " & beforeRules & " -> " & afterRules & _
+                                      " rule entries (" & removed & " duplicate(s) removed). " & _
+                                      "Unique rules in cache: " & GetLearnedSendersCount() & "."
     End If
-End Sub
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "CleanLearnedSendersFileCore", Err.Number, Err.Description
+    CleanLearnedSendersFileCore = "ERROR: " & Err.Description
+    Resume PROC_EXIT
+End Function
 
 '-------------------------------------------------------------------------------
 ' RESTORE WRONGLY DELETED EMAILS
 '-------------------------------------------------------------------------------
 
-' Scan Deleted Items, re-classify each email, and move KEEP/MOVE_II emails back
+' Scan Deleted Items, re-classify, and move KEEP/MOVE_II back (interactive wrapper)
 Public Sub RestoreDeletedKeepEmails()
     Dim deletedFolder As Outlook.Folder
-    Dim inbox As Outlook.Folder
     Dim myItems As Outlook.Items
-    Dim mail As Outlook.MailItem
-    Dim decision As String
     Dim i As Long
-    Dim restoreCount As Long
-    Dim moveIICount As Long
     Dim totalMail As Long
     Dim response As VbMsgBoxResult
-    Dim senderName As String
-    Dim subject As String
+    Dim resultText As String
 
     On Error GoTo PROC_ERR
     PushCallStack "BatchFilter.RestoreDeletedKeepEmails"
 
-    ' Force reload learned caches to use the most up-to-date rules
-    If RuntimeEnableSelfImproving Then
-        LoadLearnedSenders True
-        LoadLearnedSubjects True
-    End If
-
+    ' Peek (read-only) so the confirmation can show a count
     Set deletedFolder = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderDeletedItems)
     Set myItems = deletedFolder.Items
 
-    ' Count MailItems
     totalMail = 0
     For i = 1 To myItems.Count
         If TypeOf myItems(i) Is Outlook.MailItem Then totalMail = totalMail + 1
@@ -718,6 +1146,54 @@ Public Sub RestoreDeletedKeepEmails()
 
     If response <> vbYes Then GoTo PROC_EXIT
 
+    resultText = RestoreDeletedKeepEmailsCore()
+    MsgBox resultText, vbInformation, "Restore Deleted Keep Emails"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "RestoreDeletedKeepEmails", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Headless core: re-classify Deleted Items and restore KEEP/MOVE_II emails. No UI.
+Public Function RestoreDeletedKeepEmailsCore() As String
+    Dim deletedFolder As Outlook.Folder
+    Dim inbox As Outlook.Folder
+    Dim myItems As Outlook.Items
+    Dim mail As Outlook.MailItem
+    Dim decision As String
+    Dim i As Long
+    Dim restoreCount As Long
+    Dim moveIICount As Long
+    Dim totalMail As Long
+    Dim senderName As String
+    Dim subject As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.RestoreDeletedKeepEmailsCore"
+
+    ' Force reload learned caches to use the most up-to-date rules
+    If RuntimeEnableSelfImproving Then
+        LoadLearnedSenders True
+        LoadLearnedSubjects True
+    End If
+
+    Set deletedFolder = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderDeletedItems)
+    Set myItems = deletedFolder.Items
+
+    ' Count MailItems
+    totalMail = 0
+    For i = 1 To myItems.Count
+        If TypeOf myItems(i) Is Outlook.MailItem Then totalMail = totalMail + 1
+    Next i
+
+    If totalMail = 0 Then
+        RestoreDeletedKeepEmailsCore = "No emails in Deleted Items. Nothing restored."
+        GoTo PROC_EXIT
+    End If
+
     Set inbox = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox)
 
     restoreCount = 0
@@ -728,7 +1204,7 @@ Public Sub RestoreDeletedKeepEmails()
         If TypeOf myItems(i) Is Outlook.MailItem Then
             Set mail = myItems(i)
 
-            ' Pre-capture in case of move
+            ' Pre-capture BEFORE move (object becomes invalid after)
             senderName = mail.senderName
             subject = mail.subject
 
@@ -749,44 +1225,45 @@ Public Sub RestoreDeletedKeepEmails()
         End If
     Next i
 
-    MsgBox "Restore Complete!" & vbCrLf & vbCrLf & _
-           "Moved to Inbox: " & restoreCount & vbCrLf & _
-           "Moved to " & RuntimeFolderProtected & ": " & moveIICount & vbCrLf & _
-           "Left in Deleted Items: " & (totalMail - restoreCount - moveIICount), _
-           vbInformation, "Restore Deleted Keep Emails"
+    LogMessage "INFO", "RestoreDeletedKeepEmails complete: " & restoreCount & " to Inbox, " & moveIICount & " to " & RuntimeFolderProtected
+
+    RestoreDeletedKeepEmailsCore = "Scanned " & totalMail & " deleted emails: " & _
+                                   restoreCount & " restored to Inbox, " & _
+                                   moveIICount & " moved to " & RuntimeFolderProtected & ", " & _
+                                   (totalMail - restoreCount - moveIICount) & " left in Deleted Items."
 
 PROC_EXIT:
     PopCallStack
-    Exit Sub
+    Exit Function
 PROC_ERR:
-    LogError "BatchFilter", "RestoreDeletedKeepEmails", Err.Number, Err.Description
+    LogError "BatchFilter", "RestoreDeletedKeepEmailsCore", Err.Number, Err.Description
+    RestoreDeletedKeepEmailsCore = "ERROR: " & Err.Description
     Resume PROC_EXIT
-End Sub
+End Function
 
 '-------------------------------------------------------------------------------
 ' QUICK FILTER ACTIONS (assign to QAT or ribbon button)
 '-------------------------------------------------------------------------------
 
-' Filter selected email(s) in the active explorer window
+' Filter selected email(s) in the active explorer window (interactive wrapper)
 Public Sub FilterSelectedEmails()
+    Dim explorer As Outlook.Explorer
     Dim sel As Outlook.Selection
-    Dim mail As Outlook.MailItem
-    Dim stats As Object
-    Dim decision As String
     Dim i As Long
     Dim mailCount As Long
     Dim response As VbMsgBoxResult
+    Dim resultText As String
 
     On Error GoTo PROC_ERR
     PushCallStack "BatchFilter.FilterSelectedEmails"
 
-    ' Ensure learned caches are loaded before classifying
-    If RuntimeEnableSelfImproving Then
-        LoadLearnedSenders
-        LoadLearnedSubjects
+    Set explorer = Application.ActiveExplorer
+    If explorer Is Nothing Then
+        MsgBox "No active Outlook window.", vbExclamation, "Filter Selected"
+        GoTo PROC_EXIT
     End If
 
-    Set sel = Application.ActiveExplorer.Selection
+    Set sel = explorer.Selection
 
     If sel.Count = 0 Then
         MsgBox "No emails selected.", vbExclamation, "Filter Selected"
@@ -811,18 +1288,8 @@ Public Sub FilterSelectedEmails()
 
     If response <> vbYes Then GoTo PROC_EXIT
 
-    Set stats = CreateStatsDict()
-
-    ' Reverse iteration - deletions/moves invalidate indices
-    For i = sel.Count To 1 Step -1
-        If TypeOf sel(i) Is Outlook.MailItem Then
-            Set mail = sel(i)
-            decision = ClassifyEmail(mail)
-            ExecuteAction mail, decision, stats
-        End If
-    Next i
-
-    MsgBox FormatStats(stats), vbInformation, "Filter Selected Complete"
+    resultText = FilterSelectedEmailsCore()
+    MsgBox resultText, vbInformation, "Filter Selected Complete"
 
 PROC_EXIT:
     PopCallStack
@@ -832,23 +1299,35 @@ PROC_ERR:
     Resume PROC_EXIT
 End Sub
 
-' Filter all emails in the folder currently displayed in the active explorer
-Public Sub FilterCurrentFolder()
-    Dim folder As Outlook.Folder
-    Dim inbox As Outlook.Folder
-    Dim myItems As Outlook.Items
-    Dim stats As Object
+' Headless core: filter the current Outlook selection without confirmation.
+' Returns a per-email decision summary plus totals.
+Public Function FilterSelectedEmailsCore() As String
+    Dim explorer As Outlook.Explorer
+    Dim sel As Outlook.Selection
     Dim mail As Outlook.MailItem
+    Dim stats As Object
     Dim decision As String
     Dim i As Long
-    Dim response As VbMsgBoxResult
-    Dim isNonInbox As Boolean
-    Dim isReviewFolder As Boolean
+    Dim mailCount As Long
+    Dim detailText As String
     Dim senderName As String
     Dim subject As String
 
     On Error GoTo PROC_ERR
-    PushCallStack "BatchFilter.FilterCurrentFolder"
+    PushCallStack "BatchFilter.FilterSelectedEmailsCore"
+
+    Set explorer = Application.ActiveExplorer
+    If explorer Is Nothing Then
+        FilterSelectedEmailsCore = "ERROR: no active Outlook window"
+        GoTo PROC_EXIT
+    End If
+
+    Set sel = explorer.Selection
+
+    If sel.Count = 0 Then
+        FilterSelectedEmailsCore = "ERROR: no emails selected"
+        GoTo PROC_EXIT
+    End If
 
     ' Ensure learned caches are loaded before classifying
     If RuntimeEnableSelfImproving Then
@@ -856,7 +1335,67 @@ Public Sub FilterCurrentFolder()
         LoadLearnedSubjects
     End If
 
-    Set folder = Application.ActiveExplorer.CurrentFolder
+    Set stats = CreateStatsDict()
+    mailCount = 0
+    detailText = ""
+
+    ' Reverse iteration - deletions/moves invalidate indices
+    For i = sel.Count To 1 Step -1
+        If TypeOf sel(i) Is Outlook.MailItem Then
+            Set mail = sel(i)
+
+            ' Pre-capture BEFORE action (object becomes invalid after delete/move)
+            senderName = mail.senderName
+            subject = mail.subject
+
+            decision = ClassifyEmail(mail)
+            ExecuteAction mail, decision, stats
+            mailCount = mailCount + 1
+
+            detailText = detailText & decision & " | " & _
+                         Truncate(senderName, 25) & " | " & _
+                         Truncate(subject, 40) & vbCrLf
+        End If
+    Next i
+
+    If mailCount = 0 Then
+        FilterSelectedEmailsCore = "ERROR: no email items in selection (meetings/tasks are skipped)"
+        GoTo PROC_EXIT
+    End If
+
+    FilterSelectedEmailsCore = detailText & _
+                               SummarizeStats(stats, mailCount)
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "FilterSelectedEmailsCore", Err.Number, Err.Description
+    FilterSelectedEmailsCore = "ERROR: " & Err.Description
+    Resume PROC_EXIT
+End Function
+
+' Filter all emails in the currently displayed folder (interactive wrapper)
+Public Sub FilterCurrentFolder()
+    Dim explorer As Outlook.Explorer
+    Dim folder As Outlook.Folder
+    Dim inbox As Outlook.Folder
+    Dim response As VbMsgBoxResult
+    Dim isNonInbox As Boolean
+    Dim isReviewFolder As Boolean
+    Dim itemCount As Long
+    Dim resultText As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.FilterCurrentFolder"
+
+    Set explorer = Application.ActiveExplorer
+    If explorer Is Nothing Then
+        MsgBox "No active Outlook window.", vbExclamation, "Filter Folder"
+        GoTo PROC_EXIT
+    End If
+
+    Set folder = explorer.CurrentFolder
 
     If folder Is Nothing Then
         MsgBox "No folder is currently active.", vbExclamation, "Filter Folder"
@@ -865,35 +1404,90 @@ Public Sub FilterCurrentFolder()
 
     Set inbox = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox)
     isNonInbox = (folder.EntryID <> inbox.EntryID)
-    isReviewFolder = (folder.Name = RuntimeFolderReview)
-
-    Set myItems = folder.Items
+    isReviewFolder = (StrComp(folder.Name, RuntimeFolderReview, vbTextCompare) = 0)
+    itemCount = folder.Items.Count
 
     ' Confirmation dialog (different message for non-Inbox folders)
     If isReviewFolder Then
         response = MsgBox("Filter Review folder?" & vbCrLf & _
-                          "(" & myItems.Count & " items)" & vbCrLf & vbCrLf & _
+                          "(" & itemCount & " items)" & vbCrLf & vbCrLf & _
                           "Review folder detected." & vbCrLf & _
                           "Only DELETE rules will be applied." & vbCrLf & _
                           "Non-DELETE emails will stay in Review.", _
                           vbYesNo + vbQuestion, "Filter This Folder")
     ElseIf isNonInbox Then
         response = MsgBox("Filter folder '" & folder.Name & "'?" & vbCrLf & _
-                          "(" & myItems.Count & " items)" & vbCrLf & vbCrLf & _
+                          "(" & itemCount & " items)" & vbCrLf & vbCrLf & _
                           "Non-Inbox folder detected." & vbCrLf & _
                           "KEEP/MOVE_II/REVIEW emails will be moved to Inbox." & vbCrLf & _
                           "DELETE emails will be deleted.", _
                           vbYesNo + vbQuestion, "Filter This Folder")
     Else
         response = MsgBox("Filter folder '" & folder.Name & "'?" & vbCrLf & _
-                          "(" & myItems.Count & " items)" & vbCrLf & vbCrLf & _
+                          "(" & itemCount & " items)" & vbCrLf & vbCrLf & _
                           "Actions: Delete / Move to " & RuntimeFolderProtected & " / Move to " & RuntimeFolderReview & " / Keep", _
                           vbYesNo + vbQuestion, "Filter This Folder")
     End If
 
     If response <> vbYes Then GoTo PROC_EXIT
 
+    resultText = FilterCurrentFolderCore()
+    MsgBox resultText, vbInformation, "Filter '" & folder.Name & "' Complete"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "FilterCurrentFolder", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Headless core: filter the currently displayed folder. No UI.
+' Keeps Review DELETE-only mode: in the Review folder, non-DELETE emails stay put.
+Public Function FilterCurrentFolderCore() As String
+    Dim explorer As Outlook.Explorer
+    Dim folder As Outlook.Folder
+    Dim inbox As Outlook.Folder
+    Dim myItems As Outlook.Items
+    Dim stats As Object
+    Dim mail As Outlook.MailItem
+    Dim decision As String
+    Dim i As Long
+    Dim isNonInbox As Boolean
+    Dim isReviewFolder As Boolean
+    Dim senderName As String
+    Dim subject As String
+    Dim processedCount As Long
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.FilterCurrentFolderCore"
+
+    Set explorer = Application.ActiveExplorer
+    If explorer Is Nothing Then
+        FilterCurrentFolderCore = "ERROR: no active Outlook window"
+        GoTo PROC_EXIT
+    End If
+
+    Set folder = explorer.CurrentFolder
+
+    If folder Is Nothing Then
+        FilterCurrentFolderCore = "ERROR: no folder is currently active"
+        GoTo PROC_EXIT
+    End If
+
+    ' Ensure learned caches are loaded before classifying
+    If RuntimeEnableSelfImproving Then
+        LoadLearnedSenders
+        LoadLearnedSubjects
+    End If
+
+    Set inbox = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox)
+    isNonInbox = (folder.EntryID <> inbox.EntryID)
+    isReviewFolder = (StrComp(folder.Name, RuntimeFolderReview, vbTextCompare) = 0)
+
+    Set myItems = folder.Items
     Set stats = CreateStatsDict()
+    processedCount = 0
 
     LogMessage "INFO", "Filtering folder '" & folder.Name & "' (" & myItems.Count & " items)" & _
                IIf(isReviewFolder, " [Review: DELETE-only mode]", IIf(isNonInbox, " [non-Inbox: KEEP->Inbox]", ""))
@@ -921,27 +1515,55 @@ Public Sub FilterCurrentFolder()
             Else
                 ExecuteAction mail, decision, stats
             End If
+
+            processedCount = processedCount + 1
+            If processedCount Mod RuntimeProgressInterval = 0 Then
+                LogMessage "INFO", "Progress in '" & folder.Name & "': " & processedCount
+                DoEvents
+            End If
         End If
     Next i
 
     LogMessage "INFO", "Folder '" & folder.Name & "' complete: " & FormatStats(stats)
-    MsgBox FormatStats(stats), vbInformation, "Filter '" & folder.Name & "' Complete"
+
+    FilterCurrentFolderCore = "Folder '" & folder.Name & "'" & _
+                              IIf(isReviewFolder, " (Review DELETE-only mode)", "") & ". " & _
+                              SummarizeStats(stats, processedCount)
 
 PROC_EXIT:
     PopCallStack
-    Exit Sub
+    Exit Function
 PROC_ERR:
-    LogError "BatchFilter", "FilterCurrentFolder", Err.Number, Err.Description
+    LogError "BatchFilter", "FilterCurrentFolderCore", Err.Number, Err.Description
+    FilterCurrentFolderCore = "ERROR: " & Err.Description
     Resume PROC_EXIT
-End Sub
+End Function
 
 '-------------------------------------------------------------------------------
 ' LEARNED SENDERS: BULK IMPORT
 '-------------------------------------------------------------------------------
 
 ' One-time import: scan existing emails in LearnKeep and LearnDelete folders
-' and record all senders as learned rules. Run once after upgrading.
+' and record all senders as learned rules. Run once after upgrading. (interactive wrapper)
 Public Sub ImportExistingLearnedFolders()
+    Dim resultText As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.ImportExistingLearnedFolders"
+
+    resultText = ImportExistingLearnedFoldersCore()
+    MsgBox resultText, vbInformation, "Import Learned Folders"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "ImportExistingLearnedFolders", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Headless core: bulk-import senders from LearnKeep/LearnDelete folders. No UI.
+Public Function ImportExistingLearnedFoldersCore() As String
     Dim ns As Outlook.NameSpace
     Dim inbox As Outlook.Folder
     Dim keepFolder As Outlook.Folder
@@ -954,19 +1576,24 @@ Public Sub ImportExistingLearnedFolders()
     Dim skipCount As Long
     Dim senderEmail As String
 
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.ImportExistingLearnedFoldersCore"
+
     Set ns = Application.GetNamespace("MAPI")
     Set inbox = ns.GetDefaultFolder(olFolderInbox)
 
-    ' Find the learning folders
+    ' Find the learning folders (each lookup can legitimately fail)
+    Set keepFolder = Nothing
+    Set deleteFolder = Nothing
     On Error Resume Next
     Set keepFolder = inbox.Folders(RuntimeFolderLearnKeep)
     Set deleteFolder = inbox.Folders(RuntimeFolderLearnDelete)
-    On Error GoTo 0
+    On Error GoTo PROC_ERR
 
     If keepFolder Is Nothing And deleteFolder Is Nothing Then
-        MsgBox "Neither '" & RuntimeFolderLearnKeep & "' nor '" & RuntimeFolderLearnDelete & "' folder found under Inbox.", _
-               vbExclamation, "Import Learned Folders"
-        Exit Sub
+        ImportExistingLearnedFoldersCore = "ERROR: neither '" & RuntimeFolderLearnKeep & _
+                                           "' nor '" & RuntimeFolderLearnDelete & "' folder found under Inbox"
+        GoTo PROC_EXIT
     End If
 
     keepCount = 0
@@ -1009,13 +1636,19 @@ Public Sub ImportExistingLearnedFolders()
         Next i
     End If
 
-    MsgBox "Import complete!" & vbCrLf & vbCrLf & _
-           "From '" & RuntimeFolderLearnKeep & "': " & keepCount & " senders -> KEEP" & vbCrLf & _
-           "From '" & RuntimeFolderLearnDelete & "': " & deleteCount & " senders -> DELETE" & vbCrLf & _
-           IIf(skipCount > 0, "Skipped (no @ in address): " & skipCount & vbCrLf, "") & vbCrLf & _
-           "Total unique rules now: " & GetLearnedSendersCount(), _
-           vbInformation, "Import Learned Folders"
-End Sub
+    ImportExistingLearnedFoldersCore = "Imported " & keepCount & " KEEP senders from '" & RuntimeFolderLearnKeep & _
+                                       "' and " & deleteCount & " DELETE senders from '" & RuntimeFolderLearnDelete & "'." & _
+                                       IIf(skipCount > 0, " Skipped (no @ in address): " & skipCount & ".", "") & _
+                                       " Total unique rules now: " & GetLearnedSendersCount() & "."
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "ImportExistingLearnedFoldersCore", Err.Number, Err.Description
+    ImportExistingLearnedFoldersCore = "ERROR: " & Err.Description
+    Resume PROC_EXIT
+End Function
 
 '-------------------------------------------------------------------------------
 ' LEARNED SUBJECTS DIAGNOSTICS
@@ -1023,25 +1656,6 @@ End Sub
 
 ' Dump all learned subject rules to the Immediate Window for review
 Public Sub ShowLearnedSubjectsList()
-    If Not RuntimeEnableSelfImproving Then
-        MsgBox "Self-improving filter is disabled.", vbInformation, "Learned Subjects"
-        Exit Sub
-    End If
-
-    ' Force reload to get freshest data
-    LoadLearnedSubjects True
-
-    Dim count As Long
-    count = GetLearnedSubjectsCount()
-
-    If count = 0 Then
-        MsgBox "No learned subject rules found." & vbCrLf & vbCrLf & _
-               "Drag emails into the '" & RuntimeFolderLearnSubject & "' folder to learn subject-based DELETE rules.", _
-               vbInformation, "Learned Subjects"
-        Exit Sub
-    End If
-
-    ' Read the file directly to show all entries with timestamps
     Dim filePath As String
     Dim fso As Object
     Dim ts As Object
@@ -1050,21 +1664,43 @@ Public Sub ShowLearnedSubjectsList()
     Dim parts() As String
     Dim lineNum As Long
     Dim deleteCount As Long
+    Dim count As Long
+    Dim action As String
 
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.ShowLearnedSubjectsList"
+
+    If Not RuntimeEnableSelfImproving Then
+        MsgBox "Self-improving filter is disabled.", vbInformation, "Learned Subjects"
+        GoTo PROC_EXIT
+    End If
+
+    ' Force reload to get freshest data
+    LoadLearnedSubjects True
+
+    count = GetLearnedSubjectsCount()
+
+    If count = 0 Then
+        MsgBox "No learned subject rules found." & vbCrLf & vbCrLf & _
+               "Drag emails into the '" & RuntimeFolderLearnSubject & "' folder to learn subject-based DELETE rules.", _
+               vbInformation, "Learned Subjects"
+        GoTo PROC_EXIT
+    End If
+
+    ' Read the file directly to show all entries with timestamps
     filePath = GetLearnedSubjectsFilePath()
 
     Set fso = CreateObject("Scripting.FileSystemObject")
     If Not fso.FileExists(filePath) Then
         MsgBox "Learned subjects file not found at:" & vbCrLf & filePath, vbExclamation
         Set fso = Nothing
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     output = "=== LEARNED SUBJECT RULES ===" & vbCrLf
     output = output & "File: " & filePath & vbCrLf
     output = output & String(60, "=") & vbCrLf & vbCrLf
 
-    Dim action As String
     deleteCount = 0
     lineNum = 0
 
@@ -1108,65 +1744,101 @@ Public Sub ShowLearnedSubjectsList()
            "Unique rules in cache: " & count & vbCrLf & _
            "DELETE: " & deleteCount, _
            vbInformation, "Learned Subjects List"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "ShowLearnedSubjectsList", Err.Number, Err.Description
+    ' Safe cleanup: after On Error Resume Next the error state is cleared,
+    ' so jump with GoTo (Resume would raise "Resume without error")
+    On Error Resume Next
+    If Not ts Is Nothing Then ts.Close
+    Set ts = Nothing
+    Set fso = Nothing
+    GoTo PROC_EXIT
 End Sub
 
-' Remove duplicate entries from the learned subjects file and show results
+' Remove duplicate entries from the learned subjects file (interactive wrapper)
 Public Sub CleanLearnedSubjectsFile()
+    Dim resultText As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.CleanLearnedSubjectsFile"
+
+    resultText = CleanLearnedSubjectsFileCore()
+    MsgBox resultText, vbInformation, "Clean Learned Subjects"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "CleanLearnedSubjectsFile", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Headless core: deduplicate the learned subjects file. No UI.
+' Counts only rule lines (non-comment, non-blank) so "removed" is accurate.
+Public Function CleanLearnedSubjectsFileCore() As String
+    Dim beforeRules As Long
+    Dim afterRules As Long
+    Dim removed As Long
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.CleanLearnedSubjectsFileCore"
+
     If Not RuntimeEnableSelfImproving Then
-        MsgBox "Self-improving filter is disabled.", vbInformation, "Learned Subjects"
-        Exit Sub
+        CleanLearnedSubjectsFileCore = "ERROR: self-improving filter is disabled (set EnableSelfImproving=True in settings.ini)"
+        GoTo PROC_EXIT
     End If
 
-    Dim countBefore As Long
-    countBefore = GetLearnedSubjectsCount()
-
-    ' Read line count before dedup
-    Dim filePath As String
-    Dim fso As Object
-    Dim ts As Object
-    Dim linesBefore As Long
-
-    filePath = GetLearnedSubjectsFilePath()
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    If fso.FileExists(filePath) Then
-        Set ts = fso.OpenTextFile(filePath, 1)
-        linesBefore = 0
-        Do While Not ts.AtEndOfStream
-            ts.ReadLine
-            linesBefore = linesBefore + 1
-        Loop
-        ts.Close
-        Set ts = Nothing
-    Else
-        linesBefore = 0
-    End If
-    Set fso = Nothing
+    beforeRules = CountRuleLines(GetLearnedSubjectsFilePath())
 
     ' Run deduplication
     DeduplicateLearnedSubjects
 
-    Dim countAfter As Long
-    countAfter = GetLearnedSubjectsCount()
-    Dim removed As Long
-    removed = linesBefore - countAfter
+    afterRules = CountRuleLines(GetLearnedSubjectsFilePath())
+    removed = beforeRules - afterRules
+    If removed < 0 Then removed = 0
 
     If removed = 0 Then
-        MsgBox "No duplicates found." & vbCrLf & vbCrLf & _
-               "File has " & linesBefore & " entries, all unique.", _
-               vbInformation, "Clean Learned Subjects"
+        CleanLearnedSubjectsFileCore = "No duplicates found. File has " & afterRules & " rule entries, all unique."
     Else
-        MsgBox "Deduplication complete!" & vbCrLf & vbCrLf & _
-               "Lines before: " & linesBefore & vbCrLf & _
-               "Lines after:  " & countAfter & vbCrLf & _
-               "Removed:      " & removed & " duplicate(s)" & vbCrLf & vbCrLf & _
-               "Unique rules: " & countAfter, _
-               vbInformation, "Clean Learned Subjects"
+        CleanLearnedSubjectsFileCore = "Deduplication complete: " & beforeRules & " -> " & afterRules & _
+                                       " rule entries (" & removed & " duplicate(s) removed). " & _
+                                       "Unique rules in cache: " & GetLearnedSubjectsCount() & "."
     End If
-End Sub
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "CleanLearnedSubjectsFileCore", Err.Number, Err.Description
+    CleanLearnedSubjectsFileCore = "ERROR: " & Err.Description
+    Resume PROC_EXIT
+End Function
 
 ' One-time import: scan existing emails in LearnSubjectDelete folder
-' and record all subjects as learned DELETE rules.
+' and record all subjects as learned DELETE rules. (interactive wrapper)
 Public Sub ImportExistingLearnedSubjectFolder()
+    Dim resultText As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.ImportExistingLearnedSubjectFolder"
+
+    resultText = ImportExistingLearnedSubjectFolderCore()
+    MsgBox resultText, vbInformation, "Import Learned Subject Folder"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "ImportExistingLearnedSubjectFolder", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Headless core: bulk-import subjects from LearnSubjectDelete folder. No UI.
+Public Function ImportExistingLearnedSubjectFolderCore() As String
     Dim ns As Outlook.NameSpace
     Dim inbox As Outlook.Folder
     Dim subjectFolder As Outlook.Folder
@@ -1176,19 +1848,22 @@ Public Sub ImportExistingLearnedSubjectFolder()
     Dim importCount As Long
     Dim skipCount As Long
 
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.ImportExistingLearnedSubjectFolderCore"
+
     Set ns = Application.GetNamespace("MAPI")
     Set inbox = ns.GetDefaultFolder(olFolderInbox)
 
-    ' Find the folder
+    ' Find the folder (lookup can legitimately fail)
+    Set subjectFolder = Nothing
     On Error Resume Next
     Set subjectFolder = inbox.Folders(RuntimeFolderLearnSubject)
-    On Error GoTo 0
+    On Error GoTo PROC_ERR
 
     If subjectFolder Is Nothing Then
-        MsgBox "'" & RuntimeFolderLearnSubject & "' folder not found under Inbox." & vbCrLf & vbCrLf & _
-               "Create it first, then drag emails there to learn subject-based DELETE rules.", _
-               vbExclamation, "Import Learned Subject Folder"
-        Exit Sub
+        ImportExistingLearnedSubjectFolderCore = "ERROR: '" & RuntimeFolderLearnSubject & _
+                                                 "' folder not found under Inbox (create it first)"
+        GoTo PROC_EXIT
     End If
 
     Set myItems = subjectFolder.Items
@@ -1208,32 +1883,37 @@ Public Sub ImportExistingLearnedSubjectFolder()
         End If
     Next i
 
-    MsgBox "Import complete!" & vbCrLf & vbCrLf & _
-           "From '" & RuntimeFolderLearnSubject & "': " & importCount & " subjects -> DELETE" & vbCrLf & _
-           IIf(skipCount > 0, "Skipped (empty subject): " & skipCount & vbCrLf, "") & vbCrLf & _
-           "Total unique subject rules now: " & GetLearnedSubjectsCount(), _
-           vbInformation, "Import Learned Subject Folder"
-End Sub
+    ImportExistingLearnedSubjectFolderCore = "Imported " & importCount & " DELETE subjects from '" & _
+                                             RuntimeFolderLearnSubject & "'." & _
+                                             IIf(skipCount > 0, " Skipped (empty subject): " & skipCount & ".", "") & _
+                                             " Total unique subject rules now: " & GetLearnedSubjectsCount() & "."
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "ImportExistingLearnedSubjectFolderCore", Err.Number, Err.Description
+    ImportExistingLearnedSubjectFolderCore = "ERROR: " & Err.Description
+    Resume PROC_EXIT
+End Function
 
 '-------------------------------------------------------------------------------
 ' IMPORT SERVER-SIDE RULES AS LEARNED RULES
 '-------------------------------------------------------------------------------
 
-' Import server-side Outlook Rules as learned sender/subject DELETE rules.
+' Import server-side Outlook Rules as learned rules (interactive wrapper)
 Public Sub ImportServerRules()
     Dim rules As Object  ' Outlook.Rules
-    Dim rl As Object     ' Outlook.Rule
     Dim i As Long
-    Dim senderCount As Long
-    Dim subjectCount As Long
-    Dim ruleCount As Long
-    Dim skippedCount As Long
+    Dim enabledCount As Long
+    Dim ruleEnabled As Boolean
     Dim response As VbMsgBoxResult
+    Dim resultText As String
 
     On Error GoTo PROC_ERR
     PushCallStack "BatchFilter.ImportServerRules"
 
-    ' Get server rules
+    ' Get server rules (read-only peek for the confirmation dialog)
     Set rules = Application.Session.DefaultStore.GetRules()
 
     If rules.Count = 0 Then
@@ -1241,11 +1921,14 @@ Public Sub ImportServerRules()
         GoTo PROC_EXIT
     End If
 
-    ' Count enabled rules
-    Dim enabledCount As Long
+    ' Count enabled rules (narrow OERN: .Enabled can fail on corrupt rules)
     enabledCount = 0
     For i = 1 To rules.Count
-        If rules.Item(i).Enabled Then enabledCount = enabledCount + 1
+        ruleEnabled = False
+        On Error Resume Next
+        ruleEnabled = rules.Item(i).Enabled
+        On Error GoTo PROC_ERR
+        If ruleEnabled Then enabledCount = enabledCount + 1
     Next i
 
     response = MsgBox("Found " & rules.Count & " server rules (" & enabledCount & " enabled)." & vbCrLf & vbCrLf & _
@@ -1257,138 +1940,8 @@ Public Sub ImportServerRules()
 
     If response <> vbYes Then GoTo PROC_EXIT
 
-    ' Declare loop variables at procedure level (VBA has no block scoping)
-    Dim recip As Object
-    Dim recipEmail As String
-    Dim j As Long
-    Dim addrArray As Variant
-    Dim addr As Variant
-    Dim subjArray As Variant
-    Dim subj As Variant
-    Dim sobArray As Variant
-    Dim sob As Variant
-
-    senderCount = 0
-    subjectCount = 0
-    ruleCount = 0
-    skippedCount = 0
-
-    For i = 1 To rules.Count
-        Set rl = rules.Item(i)
-
-        ' Only process enabled rules
-        If Not rl.Enabled Then
-            skippedCount = skippedCount + 1
-            GoTo NextRule
-        End If
-
-        ruleCount = ruleCount + 1
-        LogMessage "INFO", "Importing rule: " & rl.Name
-
-        ' --- Extract SENDER conditions ---
-
-        ' Conditions.From.Recipients (Exchange recipients)
-        On Error Resume Next
-        If Not rl.Conditions.From Is Nothing Then
-            If rl.Conditions.From.Enabled Then
-                For j = 1 To rl.Conditions.From.Recipients.Count
-                    Set recip = rl.Conditions.From.Recipients.Item(j)
-
-                    ' Try to resolve Exchange address to SMTP
-                    recipEmail = ""
-                    If Not recip.AddressEntry Is Nothing Then
-                        If recip.AddressEntry.AddressEntryUserType = 0 Then  ' olExchangeUserAddressEntry
-                            If Not recip.AddressEntry.GetExchangeUser Is Nothing Then
-                                recipEmail = LCase(recip.AddressEntry.GetExchangeUser.PrimarySmtpAddress)
-                            End If
-                        Else
-                            recipEmail = LCase(recip.AddressEntry.Address)
-                        End If
-                    End If
-
-                    ' Fall back to Address property
-                    If Len(recipEmail) = 0 Then
-                        recipEmail = LCase(recip.Address)
-                    End If
-
-                    If Len(recipEmail) > 0 And InStr(1, recipEmail, "@") > 0 Then
-                        RecordLearnedSender recipEmail, "DELETE"
-                        senderCount = senderCount + 1
-                        LogMessage "INFO", "  Sender from rule '" & rl.Name & "': " & recipEmail
-                    End If
-                Next j
-            End If
-        End If
-        On Error GoTo PROC_ERR
-
-        ' Conditions.SenderAddress.Address (string array of email addresses)
-        On Error Resume Next
-        If Not rl.Conditions.SenderAddress Is Nothing Then
-            If rl.Conditions.SenderAddress.Enabled Then
-                addrArray = rl.Conditions.SenderAddress.Address
-                If IsArray(addrArray) Then
-                    For Each addr In addrArray
-                        If Len(addr) > 0 And InStr(1, CStr(addr), "@") > 0 Then
-                            RecordLearnedSender LCase(CStr(addr)), "DELETE"
-                            senderCount = senderCount + 1
-                            LogMessage "INFO", "  SenderAddress from rule '" & rl.Name & "': " & CStr(addr)
-                        End If
-                    Next addr
-                End If
-            End If
-        End If
-        On Error GoTo PROC_ERR
-
-        ' --- Extract SUBJECT conditions ---
-
-        ' Conditions.Subject.Text (array of subject keywords)
-        On Error Resume Next
-        If Not rl.Conditions.subject Is Nothing Then
-            If rl.Conditions.subject.Enabled Then
-                subjArray = rl.Conditions.subject.text
-                If IsArray(subjArray) Then
-                    For Each subj In subjArray
-                        If Len(Trim(CStr(subj))) > 0 Then
-                            RecordLearnedSubject Trim(CStr(subj)), "DELETE"
-                            subjectCount = subjectCount + 1
-                            LogMessage "INFO", "  Subject from rule '" & rl.Name & "': " & CStr(subj)
-                        End If
-                    Next subj
-                End If
-            End If
-        End If
-        On Error GoTo PROC_ERR
-
-        ' Conditions.SubjectOrBody.Text (some rules use "subject or body contains")
-        On Error Resume Next
-        If Not rl.Conditions.SubjectOrBody Is Nothing Then
-            If rl.Conditions.SubjectOrBody.Enabled Then
-                sobArray = rl.Conditions.SubjectOrBody.text
-                If IsArray(sobArray) Then
-                    For Each sob In sobArray
-                        If Len(Trim(CStr(sob))) > 0 Then
-                            RecordLearnedSubject Trim(CStr(sob)), "DELETE"
-                            subjectCount = subjectCount + 1
-                            LogMessage "INFO", "  SubjectOrBody from rule '" & rl.Name & "': " & CStr(sob)
-                        End If
-                    Next sob
-                End If
-            End If
-        End If
-        On Error GoTo PROC_ERR
-
-NextRule:
-    Next i
-
-    MsgBox "Server Rule Import Complete!" & vbCrLf & vbCrLf & _
-           "Rules processed: " & ruleCount & " (skipped " & skippedCount & " disabled)" & vbCrLf & _
-           "Senders imported: " & senderCount & " -> learned DELETE" & vbCrLf & _
-           "Subjects imported: " & subjectCount & " -> learned DELETE" & vbCrLf & vbCrLf & _
-           "Total learned sender rules: " & GetLearnedSendersCount() & vbCrLf & _
-           "Total learned subject rules: " & GetLearnedSubjectsCount() & vbCrLf & vbCrLf & _
-           "You can now delete the server rules via:" & vbCrLf & _
-           "Home -> Rules -> Manage Rules & Alerts", _
-           vbInformation, "Import Server Rules"
+    resultText = ImportServerRulesCore()
+    MsgBox resultText, vbInformation, "Import Server Rules"
 
 PROC_EXIT:
     PopCallStack
@@ -1398,15 +1951,386 @@ PROC_ERR:
     Resume PROC_EXIT
 End Sub
 
+' Headless core: import server rules as learned DELETE rules. No UI.
+' Each On Error Resume Next covers exactly one COM property access; failures
+' are counted (condErrors) and logged instead of silently swallowed.
+Public Function ImportServerRulesCore() As String
+    Dim rules As Object  ' Outlook.Rules
+    Dim rl As Object     ' Outlook.Rule
+    Dim i As Long
+    Dim j As Long
+    Dim senderCount As Long
+    Dim subjectCount As Long
+    Dim ruleCount As Long
+    Dim skippedCount As Long
+    Dim condErrors As Long
+    Dim ruleEnabled As Boolean
+    Dim ruleName As String
+    Dim condObj As Object
+    Dim condEnabled As Boolean
+    Dim recipCount As Long
+    Dim recip As Object
+    Dim recipEmail As String
+    Dim addrArray As Variant
+    Dim addr As Variant
+    Dim subjArray As Variant
+    Dim subj As Variant
+    Dim sobArray As Variant
+    Dim sob As Variant
+    Dim errText As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.ImportServerRulesCore"
+
+    ' Get server rules
+    Set rules = Application.Session.DefaultStore.GetRules()
+
+    If rules.Count = 0 Then
+        ImportServerRulesCore = "No server-side rules found. Nothing imported."
+        GoTo PROC_EXIT
+    End If
+
+    senderCount = 0
+    subjectCount = 0
+    ruleCount = 0
+    skippedCount = 0
+    condErrors = 0
+
+    For i = 1 To rules.Count
+        Set rl = rules.Item(i)
+
+        ' Only process enabled rules (.Enabled can fail on corrupt rules)
+        ruleEnabled = False
+        On Error Resume Next
+        ruleEnabled = rl.Enabled
+        If Err.Number <> 0 Then
+            errText = Err.Description
+            condErrors = condErrors + 1
+            LogMessage "WARN", "ImportServerRules: cannot read Enabled on rule #" & i & ": " & errText
+        End If
+        On Error GoTo PROC_ERR
+
+        If Not ruleEnabled Then
+            skippedCount = skippedCount + 1
+            GoTo NextRule
+        End If
+
+        ruleCount = ruleCount + 1
+
+        ruleName = "(unnamed rule #" & i & ")"
+        On Error Resume Next
+        ruleName = rl.Name
+        On Error GoTo PROC_ERR
+        LogMessage "INFO", "Importing rule: " & ruleName
+
+        ' --- Extract SENDER conditions ---
+
+        ' Conditions.From.Recipients (Exchange recipients)
+        Set condObj = Nothing
+        On Error Resume Next
+        Set condObj = rl.Conditions.From
+        If Err.Number <> 0 Then
+            errText = Err.Description
+            condErrors = condErrors + 1
+            LogMessage "WARN", "ImportServerRules: Conditions.From unreadable on '" & ruleName & "': " & errText
+        End If
+        On Error GoTo PROC_ERR
+
+        If Not condObj Is Nothing Then
+            condEnabled = False
+            On Error Resume Next
+            condEnabled = condObj.Enabled
+            If Err.Number <> 0 Then
+                errText = Err.Description
+                condErrors = condErrors + 1
+                LogMessage "WARN", "ImportServerRules: From.Enabled unreadable on '" & ruleName & "': " & errText
+            End If
+            On Error GoTo PROC_ERR
+
+            If condEnabled Then
+                recipCount = 0
+                On Error Resume Next
+                recipCount = condObj.Recipients.Count
+                If Err.Number <> 0 Then
+                    errText = Err.Description
+                    condErrors = condErrors + 1
+                    LogMessage "WARN", "ImportServerRules: From.Recipients unreadable on '" & ruleName & "': " & errText
+                End If
+                On Error GoTo PROC_ERR
+
+                For j = 1 To recipCount
+                    Set recip = Nothing
+                    On Error Resume Next
+                    Set recip = condObj.Recipients.Item(j)
+                    If Err.Number <> 0 Then
+                        errText = Err.Description
+                        condErrors = condErrors + 1
+                        LogMessage "WARN", "ImportServerRules: recipient " & j & " unreadable on '" & ruleName & "': " & errText
+                    End If
+                    On Error GoTo PROC_ERR
+
+                    If Not recip Is Nothing Then
+                        recipEmail = ResolveRecipientSmtp(recip)
+                        If Len(recipEmail) > 0 And InStr(1, recipEmail, "@") > 0 Then
+                            RecordLearnedSender recipEmail, "DELETE"
+                            senderCount = senderCount + 1
+                            LogMessage "INFO", "  Sender from rule '" & ruleName & "': " & recipEmail
+                        ElseIf Len(recipEmail) = 0 Then
+                            condErrors = condErrors + 1
+                            LogMessage "WARN", "ImportServerRules: could not resolve recipient " & j & " on '" & ruleName & "'"
+                        End If
+                    End If
+                Next j
+            End If
+        End If
+
+        ' Conditions.SenderAddress.Address (string array of email addresses)
+        Set condObj = Nothing
+        On Error Resume Next
+        Set condObj = rl.Conditions.SenderAddress
+        If Err.Number <> 0 Then
+            errText = Err.Description
+            condErrors = condErrors + 1
+            LogMessage "WARN", "ImportServerRules: Conditions.SenderAddress unreadable on '" & ruleName & "': " & errText
+        End If
+        On Error GoTo PROC_ERR
+
+        If Not condObj Is Nothing Then
+            condEnabled = False
+            On Error Resume Next
+            condEnabled = condObj.Enabled
+            If Err.Number <> 0 Then
+                errText = Err.Description
+                condErrors = condErrors + 1
+                LogMessage "WARN", "ImportServerRules: SenderAddress.Enabled unreadable on '" & ruleName & "': " & errText
+            End If
+            On Error GoTo PROC_ERR
+
+            If condEnabled Then
+                addrArray = Empty
+                On Error Resume Next
+                addrArray = condObj.Address
+                If Err.Number <> 0 Then
+                    errText = Err.Description
+                    condErrors = condErrors + 1
+                    LogMessage "WARN", "ImportServerRules: SenderAddress.Address unreadable on '" & ruleName & "': " & errText
+                End If
+                On Error GoTo PROC_ERR
+
+                If IsArray(addrArray) Then
+                    For Each addr In addrArray
+                        If Len(addr) > 0 And InStr(1, CStr(addr), "@") > 0 Then
+                            RecordLearnedSender LCase(CStr(addr)), "DELETE"
+                            senderCount = senderCount + 1
+                            LogMessage "INFO", "  SenderAddress from rule '" & ruleName & "': " & CStr(addr)
+                        End If
+                    Next addr
+                End If
+            End If
+        End If
+
+        ' --- Extract SUBJECT conditions ---
+
+        ' Conditions.Subject.Text (array of subject keywords)
+        Set condObj = Nothing
+        On Error Resume Next
+        Set condObj = rl.Conditions.subject
+        If Err.Number <> 0 Then
+            errText = Err.Description
+            condErrors = condErrors + 1
+            LogMessage "WARN", "ImportServerRules: Conditions.Subject unreadable on '" & ruleName & "': " & errText
+        End If
+        On Error GoTo PROC_ERR
+
+        If Not condObj Is Nothing Then
+            condEnabled = False
+            On Error Resume Next
+            condEnabled = condObj.Enabled
+            If Err.Number <> 0 Then
+                errText = Err.Description
+                condErrors = condErrors + 1
+                LogMessage "WARN", "ImportServerRules: Subject.Enabled unreadable on '" & ruleName & "': " & errText
+            End If
+            On Error GoTo PROC_ERR
+
+            If condEnabled Then
+                subjArray = Empty
+                On Error Resume Next
+                subjArray = condObj.text
+                If Err.Number <> 0 Then
+                    errText = Err.Description
+                    condErrors = condErrors + 1
+                    LogMessage "WARN", "ImportServerRules: Subject.Text unreadable on '" & ruleName & "': " & errText
+                End If
+                On Error GoTo PROC_ERR
+
+                If IsArray(subjArray) Then
+                    For Each subj In subjArray
+                        If Len(Trim(CStr(subj))) > 0 Then
+                            RecordLearnedSubject Trim(CStr(subj)), "DELETE"
+                            subjectCount = subjectCount + 1
+                            LogMessage "INFO", "  Subject from rule '" & ruleName & "': " & CStr(subj)
+                        End If
+                    Next subj
+                End If
+            End If
+        End If
+
+        ' Conditions.SubjectOrBody.Text (some rules use "subject or body contains")
+        Set condObj = Nothing
+        On Error Resume Next
+        Set condObj = rl.Conditions.SubjectOrBody
+        If Err.Number <> 0 Then
+            errText = Err.Description
+            condErrors = condErrors + 1
+            LogMessage "WARN", "ImportServerRules: Conditions.SubjectOrBody unreadable on '" & ruleName & "': " & errText
+        End If
+        On Error GoTo PROC_ERR
+
+        If Not condObj Is Nothing Then
+            condEnabled = False
+            On Error Resume Next
+            condEnabled = condObj.Enabled
+            If Err.Number <> 0 Then
+                errText = Err.Description
+                condErrors = condErrors + 1
+                LogMessage "WARN", "ImportServerRules: SubjectOrBody.Enabled unreadable on '" & ruleName & "': " & errText
+            End If
+            On Error GoTo PROC_ERR
+
+            If condEnabled Then
+                sobArray = Empty
+                On Error Resume Next
+                sobArray = condObj.text
+                If Err.Number <> 0 Then
+                    errText = Err.Description
+                    condErrors = condErrors + 1
+                    LogMessage "WARN", "ImportServerRules: SubjectOrBody.Text unreadable on '" & ruleName & "': " & errText
+                End If
+                On Error GoTo PROC_ERR
+
+                If IsArray(sobArray) Then
+                    For Each sob In sobArray
+                        If Len(Trim(CStr(sob))) > 0 Then
+                            RecordLearnedSubject Trim(CStr(sob)), "DELETE"
+                            subjectCount = subjectCount + 1
+                            LogMessage "INFO", "  SubjectOrBody from rule '" & ruleName & "': " & CStr(sob)
+                        End If
+                    Next sob
+                End If
+            End If
+        End If
+
+NextRule:
+    Next i
+
+    LogMessage "INFO", "ImportServerRules complete: " & ruleCount & " rules, " & senderCount & _
+               " senders, " & subjectCount & " subjects, " & condErrors & " read errors"
+
+    ImportServerRulesCore = "Processed " & ruleCount & " enabled rules (skipped " & skippedCount & " disabled): " & _
+                            "imported " & senderCount & " senders and " & subjectCount & " subjects as learned DELETE rules." & _
+                            IIf(condErrors > 0, " Property read errors: " & condErrors & " (see log).", "") & vbCrLf & _
+                            "Total learned sender rules: " & GetLearnedSendersCount() & _
+                            ", subject rules: " & GetLearnedSubjectsCount() & "."
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "ImportServerRulesCore", Err.Number, Err.Description
+    ImportServerRulesCore = "ERROR: " & Err.Description
+    Resume PROC_EXIT
+End Function
+
 '-------------------------------------------------------------------------------
 ' EXPORT LEARNED RULES TO SERVER-SIDE OUTLOOK RULES
 '-------------------------------------------------------------------------------
 
-' Export learned DELETE rules (senders and subjects) as server-side Outlook Rules.
+' Export learned DELETE rules as server-side Outlook Rules (interactive wrapper)
 Public Sub ExportLearnedRulesToServer()
     Dim colRules As Object          ' Outlook.Rules
-    Dim newRule As Object           ' Outlook.Rule
     Dim response As VbMsgBoxResult
+    Dim existingCount As Long
+    Dim i As Long
+    Dim senderCount As Long
+    Dim subjectCount As Long
+    Dim removeExisting As Boolean
+    Dim resultText As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.ExportLearnedRulesToServer"
+
+    If Not RuntimeEnableSelfImproving Then
+        MsgBox "Self-improving filter is disabled." & vbCrLf & _
+               "Set EnableSelfImproving=True in settings.ini.", _
+               vbInformation, "Export Learned Rules"
+        GoTo PROC_EXIT
+    End If
+
+    ' Load caches so the confirmation can show counts
+    LoadLearnedSenders
+    LoadLearnedSubjects
+
+    senderCount = GetLearnedDeleteSenders().Count
+    subjectCount = GetLearnedSubjectKeys().Count
+
+    If senderCount = 0 And subjectCount = 0 Then
+        MsgBox "No learned DELETE rules to export." & vbCrLf & vbCrLf & _
+               "Drag emails into '" & RuntimeFolderLearnDelete & "' (sender) or " & _
+               "'" & RuntimeFolderLearnSubject & "' (subject) to learn DELETE rules.", _
+               vbInformation, "Export Learned Rules"
+        GoTo PROC_EXIT
+    End If
+
+    response = MsgBox("Export learned DELETE rules to server-side Outlook Rules?" & vbCrLf & vbCrLf & _
+                      "Sender DELETE rules: " & senderCount & vbCrLf & _
+                      "Subject DELETE rules: " & subjectCount & vbCrLf & vbCrLf & _
+                      "Server rules run on Exchange even when Outlook is closed." & vbCrLf & _
+                      "Action: Delete (to Deleted Items, recoverable)." & vbCrLf & vbCrLf & _
+                      "Continue?", vbYesNo + vbQuestion, "Export Learned Rules to Server")
+
+    If response <> vbYes Then GoTo PROC_EXIT
+
+    ' Check for existing export rules (read-only peek for the second dialog)
+    Set colRules = Application.Session.DefaultStore.GetRules()
+    existingCount = 0
+    For i = colRules.Count To 1 Step -1
+        If Left(colRules.Item(i).Name, 18) = "VBA Filter Export " Then
+            existingCount = existingCount + 1
+        End If
+    Next i
+    Set colRules = Nothing  ' Core gets its own fresh Rules collection
+
+    removeExisting = True
+    If existingCount > 0 Then
+        response = MsgBox("Found " & existingCount & " existing 'VBA Filter Export' rule(s)." & vbCrLf & vbCrLf & _
+                          "Remove them before creating new ones?" & vbCrLf & _
+                          "(Recommended to avoid duplicates)", _
+                          vbYesNoCancel + vbQuestion, "Existing Export Rules")
+
+        If response = vbCancel Then GoTo PROC_EXIT
+        removeExisting = (response = vbYes)
+    End If
+
+    resultText = ExportLearnedRulesToServerCore(removeExisting)
+    MsgBox resultText, vbInformation, "Export Learned Rules to Server"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "ExportLearnedRulesToServer", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Headless core: export learned DELETE rules as server-side Outlook Rules. No UI.
+' removeExisting: True (default) removes previous "VBA Filter Export" rules first.
+' Rollback safety: after a failed Create nothing is removed; after a failed
+' configure, the new rule is removed BY NAME (never positional Remove, which
+' could delete an unrelated pre-existing rule).
+Public Function ExportLearnedRulesToServerCore(Optional ByVal removeExisting As Boolean = True) As String
+    Dim colRules As Object          ' Outlook.Rules
+    Dim newRule As Object           ' Outlook.Rule
     Dim deleteSenders As Collection
     Dim subjectKeys As Collection
     Dim senderCount As Long
@@ -1422,7 +2346,6 @@ Public Sub ExportLearnedRulesToServer()
     Dim totalBatches As Long
     Dim batchNum As Long
     Dim ruleName As String
-    Dim batchArray() As String
     Dim idx As Long
     Dim subjectSkipped As Long
     Dim cleanSubjects As Collection
@@ -1432,20 +2355,21 @@ Public Sub ExportLearnedRulesToServer()
     Dim cleanSender As String
     Dim senderSkipped As Long
     Dim varArray() As Variant
+    Dim createFailed As Boolean
+    Dim failNum As Long
+    Dim failDesc As String
 
     On Error GoTo PROC_ERR
-    PushCallStack "BatchFilter.ExportLearnedRulesToServer"
+    PushCallStack "BatchFilter.ExportLearnedRulesToServerCore"
 
     ' --- Step 1: Load caches and collect DELETE rules ---
-    If RuntimeEnableSelfImproving Then
-        LoadLearnedSenders
-        LoadLearnedSubjects
-    Else
-        MsgBox "Self-improving filter is disabled." & vbCrLf & _
-               "Set EnableSelfImproving=True in settings.ini.", _
-               vbInformation, "Export Learned Rules"
+    If Not RuntimeEnableSelfImproving Then
+        ExportLearnedRulesToServerCore = "ERROR: self-improving filter is disabled (set EnableSelfImproving=True in settings.ini)"
         GoTo PROC_EXIT
     End If
+
+    LoadLearnedSenders
+    LoadLearnedSubjects
 
     Set subjectKeys = GetLearnedSubjectKeys()
 
@@ -1469,58 +2393,29 @@ Public Sub ExportLearnedRulesToServer()
     subjectCount = subjectKeys.Count
 
     If senderCount = 0 And subjectCount = 0 Then
-        MsgBox "No learned DELETE rules to export." & vbCrLf & vbCrLf & _
-               "Drag emails into '" & RuntimeFolderLearnDelete & "' (sender) or " & _
-               "'" & RuntimeFolderLearnSubject & "' (subject) to learn DELETE rules.", _
-               vbInformation, "Export Learned Rules"
+        ExportLearnedRulesToServerCore = "No learned DELETE rules to export. Nothing created."
         GoTo PROC_EXIT
     End If
 
-    ' --- Step 2: Confirmation dialog ---
-    response = MsgBox("Export learned DELETE rules to server-side Outlook Rules?" & vbCrLf & vbCrLf & _
-                      "Sender DELETE rules: " & senderCount & vbCrLf & _
-                      "Subject DELETE rules: " & subjectCount & vbCrLf & vbCrLf & _
-                      "Server rules run on Exchange even when Outlook is closed." & vbCrLf & _
-                      "Action: Delete (to Deleted Items, recoverable)." & vbCrLf & vbCrLf & _
-                      "Continue?", vbYesNo + vbQuestion, "Export Learned Rules to Server")
-
-    If response <> vbYes Then GoTo PROC_EXIT
-
-    ' --- Step 3: Get server rules and check for existing exports ---
+    ' --- Step 2: Get server rules; optionally remove existing exports ---
     Set colRules = Application.Session.DefaultStore.GetRules()
 
-    ' Count existing VBA Filter Export rules
     existingCount = 0
     For i = colRules.Count To 1 Step -1
         If Left(colRules.Item(i).Name, 18) = "VBA Filter Export " Then
             existingCount = existingCount + 1
+            If removeExisting Then colRules.Remove i
         End If
     Next i
 
-    ' Offer to remove existing export rules
-    If existingCount > 0 Then
-        response = MsgBox("Found " & existingCount & " existing 'VBA Filter Export' rule(s)." & vbCrLf & vbCrLf & _
-                          "Remove them before creating new ones?" & vbCrLf & _
-                          "(Recommended to avoid duplicates)", _
-                          vbYesNoCancel + vbQuestion, "Existing Export Rules")
-
-        If response = vbCancel Then GoTo PROC_EXIT
-
-        If response = vbYes Then
-            ' Remove existing export rules (reverse iteration)
-            For i = colRules.Count To 1 Step -1
-                If Left(colRules.Item(i).Name, 18) = "VBA Filter Export " Then
-                    colRules.Remove i
-                End If
-            Next i
-            LogMessage "INFO", "Removed " & existingCount & " existing VBA Filter Export rules"
-        End If
+    If removeExisting And existingCount > 0 Then
+        LogMessage "INFO", "Removed " & existingCount & " existing VBA Filter Export rules"
     End If
 
     senderRuleCount = 0
     subjectRuleCount = 0
 
-    ' --- Step 4: Create sender rules (batches of 50) ---
+    ' --- Step 3: Create sender rules (batches of 50) ---
     senderSkipped = 0
 
     If senderCount > 0 Then
@@ -1549,29 +2444,35 @@ Public Sub ExportLearnedRulesToServer()
 
             On Error Resume Next
             Err.Clear
-
+            Set newRule = Nothing
             Set newRule = colRules.Create(ruleName, 0)  ' 0 = olRuleReceive
-            newRule.Conditions.SenderAddress.Address = varArray
-            newRule.Conditions.SenderAddress.Enabled = True
-            newRule.Actions.Delete.Enabled = True
-            newRule.Enabled = True
+            If Not newRule Is Nothing Then
+                newRule.Conditions.SenderAddress.Address = varArray
+                newRule.Conditions.SenderAddress.Enabled = True
+                newRule.Actions.Delete.Enabled = True
+                newRule.Enabled = True
+            End If
+            createFailed = (Err.Number <> 0) Or (newRule Is Nothing)
+            failNum = Err.Number
+            failDesc = Err.Description
+            On Error GoTo PROC_ERR
 
-            If Err.Number <> 0 Then
-                LogMessage "WARN", "Sender batch " & batchNum & " FAILED: Error " & Err.Number & ": " & Err.Description
+            If createFailed Then
+                LogMessage "WARN", "Sender batch " & batchNum & " FAILED: Error " & failNum & ": " & failDesc
                 senderSkipped = senderSkipped + (batchEnd - batchStart + 1)
-                On Error Resume Next
-                colRules.Remove colRules.Count
-                On Error Resume Next
+                ' Roll back ONLY if Create actually added a rule; remove it by name.
+                ' Never call Remove when Create itself failed (newRule Is Nothing).
+                If Not newRule Is Nothing Then
+                    RemoveRuleByName colRules, ruleName
+                End If
             Else
                 senderRuleCount = senderRuleCount + 1
                 LogMessage "INFO", "Created rule: " & ruleName & " (" & (batchEnd - batchStart + 1) & " senders)"
             End If
-
-            On Error GoTo PROC_ERR
         Next batchNum
     End If
 
-    ' --- Step 5: Sanitize subject keys ---
+    ' --- Step 4: Sanitize subject keys ---
     Set cleanSubjects = New Collection
     For j = 1 To subjectKeys.Count
         rawSubj = subjectKeys(j)
@@ -1593,89 +2494,98 @@ Public Sub ExportLearnedRulesToServer()
 
     subjectCount = cleanSubjects.Count
 
-    ' --- Step 6: Create subject rules (one per subject for robustness) ---
+    ' --- Step 5: Create subject rules (one per subject for robustness) ---
     subjectSkipped = 0
 
     If subjectCount > 0 Then
         For j = 1 To subjectCount
+            ruleName = "VBA Filter Export - Subject " & j
+
             On Error Resume Next
             Err.Clear
-
-            ruleName = "VBA Filter Export - Subject " & j
+            Set newRule = Nothing
             Set newRule = colRules.Create(ruleName, 0)
+            If Not newRule Is Nothing Then
+                newRule.Conditions.subject.text = Array(cleanSubjects(j))
+                newRule.Conditions.subject.Enabled = True
+                newRule.Actions.Delete.Enabled = True
+                newRule.Enabled = True
+            End If
+            createFailed = (Err.Number <> 0) Or (newRule Is Nothing)
+            failNum = Err.Number
+            failDesc = Err.Description
 
-            newRule.Conditions.subject.text = Array(cleanSubjects(j))
-            newRule.Conditions.subject.Enabled = True
-            newRule.Actions.Delete.Enabled = True
-            newRule.Enabled = True
-
-            If Err.Number <> 0 Then
-                LogMessage "WARN", "Subject rule FAILED (Subject.Text): """ & Left(cleanSubjects(j), 60) & """ - Error " & Err.Number & ": " & Err.Description
+            If createFailed And Not newRule Is Nothing Then
+                ' Fallback: try SubjectOrBody on the same (already created) rule
+                LogMessage "WARN", "Subject rule FAILED (Subject.Text): """ & Left(cleanSubjects(j), 60) & _
+                           """ - Error " & failNum & ": " & failDesc
                 Err.Clear
-
-                ' Fallback: try SubjectOrBody
                 newRule.Conditions.SubjectOrBody.text = Array(cleanSubjects(j))
                 newRule.Conditions.SubjectOrBody.Enabled = True
                 newRule.Actions.Delete.Enabled = True
                 newRule.Enabled = True
+                createFailed = (Err.Number <> 0)
+                failNum = Err.Number
+                failDesc = Err.Description
+            End If
+            On Error GoTo PROC_ERR
 
-                If Err.Number <> 0 Then
-                    LogMessage "WARN", "Subject rule FAILED (SubjectOrBody too): """ & Left(cleanSubjects(j), 60) & """ - Error " & Err.Number & ": " & Err.Description
-                    subjectSkipped = subjectSkipped + 1
-                    On Error Resume Next
-                    colRules.Remove colRules.Count
-                    On Error Resume Next
-                Else
-                    subjectRuleCount = subjectRuleCount + 1
+            If createFailed Then
+                LogMessage "WARN", "Subject rule FAILED: """ & Left(cleanSubjects(j), 60) & _
+                           """ - Error " & failNum & ": " & failDesc
+                subjectSkipped = subjectSkipped + 1
+                ' Roll back ONLY if Create actually added a rule; remove it by name.
+                If Not newRule Is Nothing Then
+                    RemoveRuleByName colRules, ruleName
                 End If
             Else
                 subjectRuleCount = subjectRuleCount + 1
             End If
-
-            On Error GoTo PROC_ERR
         Next j
     End If
 
-    ' --- Step 7: Save all rules to server ---
+    ' --- Step 6: Save all rules to server ---
     On Error Resume Next
     Err.Clear
     colRules.Save
+    failNum = Err.Number
+    failDesc = Err.Description
+    On Error GoTo PROC_ERR
 
-    If Err.Number <> 0 Then
-        LogMessage "ERROR", "colRules.Save failed: Error " & Err.Number & ": " & Err.Description
-        MsgBox "Rules were created but Save to server failed:" & vbCrLf & _
-               Err.Description & vbCrLf & vbCrLf & _
-               "Sender rules created: " & senderRuleCount & vbCrLf & _
-               "Subject rules created: " & subjectRuleCount & vbCrLf & _
-               "If the Rules dialog is open, close it and try again.", _
-               vbExclamation, "Export Learned Rules"
-        On Error GoTo 0
+    If failNum <> 0 Then
+        LogMessage "ERROR", "colRules.Save failed: Error " & failNum & ": " & failDesc
+        ExportLearnedRulesToServerCore = "ERROR: rules were created but Save to server failed: " & failDesc & _
+                                         " (sender rules: " & senderRuleCount & ", subject rules: " & subjectRuleCount & _
+                                         "). If the Rules dialog is open, close it and try again."
         GoTo PROC_EXIT
     End If
-    On Error GoTo 0
 
-    MsgBox "Export Complete!" & vbCrLf & vbCrLf & _
-           "Server rules created:" & vbCrLf & _
-           "  Sender rules: " & senderRuleCount & " (" & senderCount & " addresses)" & vbCrLf & _
-           IIf(senderSkipped > 0, "  Sender addresses skipped (invalid): " & senderSkipped & vbCrLf, "") & _
-           "  Subject rules: " & subjectRuleCount & " (" & subjectCount & " keywords)" & vbCrLf & _
-           IIf(subjectSkipped > 0, "  Subject rules skipped (invalid): " & subjectSkipped & vbCrLf, "") & vbCrLf & _
-           "Verify in: Home -> Rules -> Manage Rules & Alerts", _
-           vbInformation, "Export Learned Rules to Server"
+    LogMessage "INFO", "ExportLearnedRulesToServer complete: " & senderRuleCount & " sender rules, " & _
+               subjectRuleCount & " subject rules saved"
+
+    ExportLearnedRulesToServerCore = "Created " & senderRuleCount & " sender rule(s) (" & senderCount & " addresses)" & _
+                                     IIf(senderSkipped > 0, ", " & senderSkipped & " addresses skipped", "") & _
+                                     " and " & subjectRuleCount & " subject rule(s) (" & subjectCount & " keywords)" & _
+                                     IIf(subjectSkipped > 0, ", " & subjectSkipped & " skipped", "") & "." & _
+                                     IIf(removeExisting And existingCount > 0, _
+                                         " Removed " & existingCount & " previous export rule(s).", "") & _
+                                     " Verify in: Home -> Rules -> Manage Rules & Alerts."
 
 PROC_EXIT:
     PopCallStack
-    Exit Sub
+    Exit Function
 PROC_ERR:
-    LogError "BatchFilter", "ExportLearnedRulesToServer", Err.Number, Err.Description
+    LogError "BatchFilter", "ExportLearnedRulesToServerCore", Err.Number, Err.Description
+    ExportLearnedRulesToServerCore = "ERROR: " & Err.Description
     Resume PROC_EXIT
-End Sub
+End Function
 
 '-------------------------------------------------------------------------------
 ' FOLDER MIGRATION (v1.x -> v2.0)
 '-------------------------------------------------------------------------------
 
 ' Detect old-style folder names (I, II, III, IIII, V) and offer to rename them.
+' (interactive wrapper)
 Public Sub DetectAndMigrateOldFolders()
     Dim ns As Outlook.NameSpace
     Dim inbox As Outlook.Folder
@@ -1685,6 +2595,12 @@ Public Sub DetectAndMigrateOldFolders()
     Dim detectedMsg As String
     Dim detectedCount As Long
     Dim response As VbMsgBoxResult
+    Dim testFolder As Outlook.Folder
+    Dim existingNew As Outlook.Folder
+    Dim resultText As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.DetectAndMigrateOldFolders"
 
     Set ns = Application.GetNamespace("MAPI")
     Set inbox = ns.GetDefaultFolder(olFolderInbox)
@@ -1693,23 +2609,22 @@ Public Sub DetectAndMigrateOldFolders()
     oldNames = Array("I", "II", "III", "IIII", "V")
     newNames = Array(RuntimeFolderReview, RuntimeFolderProtected, RuntimeFolderLearnKeep, RuntimeFolderLearnDelete, RuntimeFolderLearnSubject)
 
+    ' Read-only detection pass for the confirmation dialog
     detectedMsg = ""
     detectedCount = 0
 
-    Dim testFolder As Outlook.Folder
     For i = 0 To UBound(oldNames)
         Set testFolder = Nothing
         On Error Resume Next
         Set testFolder = inbox.Folders(CStr(oldNames(i)))
-        On Error GoTo 0
+        On Error GoTo PROC_ERR
 
         If Not testFolder Is Nothing Then
             ' Check if the new name folder already exists
-            Dim existingNew As Outlook.Folder
             Set existingNew = Nothing
             On Error Resume Next
             Set existingNew = inbox.Folders(CStr(newNames(i)))
-            On Error GoTo 0
+            On Error GoTo PROC_ERR
 
             If existingNew Is Nothing Then
                 detectedCount = detectedCount + 1
@@ -1722,7 +2637,7 @@ Public Sub DetectAndMigrateOldFolders()
 
     If detectedCount = 0 Then
         MsgBox "No old-style folders detected. Nothing to migrate.", vbInformation, "Folder Migration"
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
     response = MsgBox("Detected " & detectedCount & " old-style folder(s) to rename:" & vbCrLf & vbCrLf & _
@@ -1731,47 +2646,131 @@ Public Sub DetectAndMigrateOldFolders()
                       "After renaming, restart Outlook to refresh event handlers.", _
                       vbYesNo + vbQuestion, "Folder Migration (v1.x -> v2.0)")
 
-    If response <> vbYes Then Exit Sub
+    If response <> vbYes Then GoTo PROC_EXIT
 
+    resultText = DetectAndMigrateOldFoldersCore()
+    MsgBox resultText, vbInformation, "Folder Migration"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "DetectAndMigrateOldFolders", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Headless core: detect and rename v1.x folders (I/II/III/IIII/V). No UI.
+Public Function DetectAndMigrateOldFoldersCore() As String
+    Dim ns As Outlook.NameSpace
+    Dim inbox As Outlook.Folder
+    Dim oldNames As Variant
+    Dim newNames As Variant
+    Dim i As Long
+    Dim detectedCount As Long
     Dim renamedCount As Long
+    Dim skippedCount As Long
+    Dim failedCount As Long
+    Dim testFolder As Outlook.Folder
+    Dim existingNew As Outlook.Folder
+    Dim renameFailed As Boolean
+    Dim failDesc As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.DetectAndMigrateOldFoldersCore"
+
+    Set ns = Application.GetNamespace("MAPI")
+    Set inbox = ns.GetDefaultFolder(olFolderInbox)
+
+    ' Old -> New name mapping
+    oldNames = Array("I", "II", "III", "IIII", "V")
+    newNames = Array(RuntimeFolderReview, RuntimeFolderProtected, RuntimeFolderLearnKeep, RuntimeFolderLearnDelete, RuntimeFolderLearnSubject)
+
+    detectedCount = 0
     renamedCount = 0
+    skippedCount = 0
+    failedCount = 0
 
     For i = 0 To UBound(oldNames)
         Set testFolder = Nothing
         On Error Resume Next
         Set testFolder = inbox.Folders(CStr(oldNames(i)))
-        On Error GoTo 0
+        On Error GoTo PROC_ERR
 
         If Not testFolder Is Nothing Then
-            Dim existNew As Outlook.Folder
-            Set existNew = Nothing
-            On Error Resume Next
-            Set existNew = inbox.Folders(CStr(newNames(i)))
-            On Error GoTo 0
+            detectedCount = detectedCount + 1
 
-            If existNew Is Nothing Then
+            Set existingNew = Nothing
+            On Error Resume Next
+            Set existingNew = inbox.Folders(CStr(newNames(i)))
+            On Error GoTo PROC_ERR
+
+            If existingNew Is Nothing Then
+                renameFailed = False
+                failDesc = ""
                 On Error Resume Next
                 testFolder.Name = CStr(newNames(i))
-                If Err.Number = 0 Then
+                renameFailed = (Err.Number <> 0)
+                failDesc = Err.Description
+                On Error GoTo PROC_ERR
+
+                If Not renameFailed Then
                     renamedCount = renamedCount + 1
                     LogMessage "INFO", "Folder renamed: '" & oldNames(i) & "' -> '" & newNames(i) & "'"
                 Else
-                    LogMessage "WARN", "Failed to rename '" & oldNames(i) & "': " & Err.Description
+                    failedCount = failedCount + 1
+                    LogMessage "WARN", "Failed to rename '" & oldNames(i) & "': " & failDesc
                 End If
-                On Error GoTo 0
+            Else
+                skippedCount = skippedCount + 1
+                LogMessage "INFO", "Migration skipped '" & oldNames(i) & "': '" & newNames(i) & "' already exists"
             End If
         End If
     Next i
 
-    MsgBox "Migration complete!" & vbCrLf & vbCrLf & _
-           "Folders renamed: " & renamedCount & vbCrLf & vbCrLf & _
-           "Please restart Outlook to refresh event handlers.", _
-           vbInformation, "Folder Migration"
+    If detectedCount = 0 Then
+        DetectAndMigrateOldFoldersCore = "No old-style folders detected. Nothing to migrate."
+    Else
+        DetectAndMigrateOldFoldersCore = "Migration complete: " & renamedCount & " folder(s) renamed" & _
+                                         IIf(skippedCount > 0, ", " & skippedCount & " skipped (target exists)", "") & _
+                                         IIf(failedCount > 0, ", " & failedCount & " failed (see log)", "") & "." & _
+                                         " Restart Outlook to refresh event handlers."
+    End If
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "DetectAndMigrateOldFoldersCore", Err.Number, Err.Description
+    DetectAndMigrateOldFoldersCore = "ERROR: " & Err.Description
+    Resume PROC_EXIT
+End Function
+
+' Display version information and system status (interactive wrapper)
+Public Sub ShowVersionInfo()
+    Dim resultText As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.ShowVersionInfo"
+
+    resultText = ShowVersionInfoCore()
+    MsgBox resultText, vbInformation, "Email Agent Version Info"
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "ShowVersionInfo", Err.Number, Err.Description
+    Resume PROC_EXIT
 End Sub
 
-' Display version information and system status
-Public Sub ShowVersionInfo()
+' Headless core: build the full version/status text. No UI.
+' The bridge (Bridge.bas DispatchMacroStd, case "ShowVersionInfo") calls this
+' directly — it is the single version-info implementation.
+Public Function ShowVersionInfoCore() As String
     Dim info As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.ShowVersionInfoCore"
 
     info = "Email Agent v" & FILTER_VERSION & vbCrLf
     info = info & "Version Date: " & FILTER_VERSION_DATE & vbCrLf
@@ -1801,5 +2800,163 @@ Public Sub ShowVersionInfo()
     info = info & "  LearnSubject: " & RuntimeFolderLearnSubject & vbCrLf
     info = info & "  LearnReply: " & RuntimeFolderLearnReply & vbCrLf
 
-    MsgBox info, vbInformation, "Email Agent Version Info"
+    ShowVersionInfoCore = info
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "ShowVersionInfoCore", Err.Number, Err.Description
+    ShowVersionInfoCore = "ERROR: " & Err.Description
+    Resume PROC_EXIT
+End Function
+
+'-------------------------------------------------------------------------------
+' PRIVATE HELPERS
+'-------------------------------------------------------------------------------
+
+' One-line stats summary for Core function return values.
+Private Function SummarizeStats(ByVal stats As Object, ByVal totalCount As Long) As String
+    Dim s As String
+
+    s = "Filtered " & totalCount & " emails: " & _
+        stats("DELETE") & " deleted, " & _
+        stats("REVIEW") & " moved to " & RuntimeFolderReview & ", " & _
+        stats("MOVE_II") & " moved to " & RuntimeFolderProtected & ", " & _
+        stats("KEEP") & " kept."
+
+    If stats("ERROR") > 0 Then
+        s = s & " Errors: " & stats("ERROR") & "."
+    End If
+
+    SummarizeStats = s
+End Function
+
+' Count rule lines in a learned-rules file: non-blank, non-comment (#) lines only.
+' Returns 0 if the file does not exist.
+Private Function CountRuleLines(ByVal filePath As String) As Long
+    Dim fso As Object
+    Dim ts As Object
+    Dim line As String
+    Dim ruleCount As Long
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.CountRuleLines"
+
+    ruleCount = 0
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If fso.FileExists(filePath) Then
+        Set ts = fso.OpenTextFile(filePath, 1)  ' ForReading
+        Do While Not ts.AtEndOfStream
+            line = Trim(ts.ReadLine)
+            If Len(line) > 0 And Left(line, 1) <> "#" Then
+                ruleCount = ruleCount + 1
+            End If
+        Loop
+        ts.Close
+        Set ts = Nothing
+    End If
+    Set fso = Nothing
+
+    CountRuleLines = ruleCount
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "CountRuleLines", Err.Number, Err.Description
+    CountRuleLines = 0
+    ' Safe cleanup: after On Error Resume Next the error state is cleared,
+    ' so jump with GoTo (Resume would raise "Resume without error")
+    On Error Resume Next
+    If Not ts Is Nothing Then ts.Close
+    Set ts = Nothing
+    Set fso = Nothing
+    GoTo PROC_EXIT
+End Function
+
+' Remove a server rule by exact name match (reverse iteration).
+' Safer than positional Remove after a failed Create, which could delete an
+' unrelated pre-existing rule.
+Private Sub RemoveRuleByName(ByVal colRules As Object, ByVal ruleName As String)
+    Dim i As Long
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.RemoveRuleByName"
+
+    For i = colRules.Count To 1 Step -1
+        If StrComp(colRules.Item(i).Name, ruleName, vbTextCompare) = 0 Then
+            colRules.Remove i
+            LogMessage "INFO", "Rolled back rule: " & ruleName
+            Exit For
+        End If
+    Next i
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "RemoveRuleByName", Err.Number, Err.Description
+    Resume PROC_EXIT
 End Sub
+
+' Resolve a rule-condition Recipient to an SMTP address. Returns "" on failure.
+' Each On Error Resume Next covers a single COM property access.
+Private Function ResolveRecipientSmtp(ByVal recip As Object) As String
+    Dim result As String
+    Dim ae As Object
+    Dim exUser As Object
+    Dim userType As Long
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.ResolveRecipientSmtp"
+
+    result = ""
+
+    Set ae = Nothing
+    On Error Resume Next
+    Set ae = recip.AddressEntry
+    On Error GoTo PROC_ERR
+
+    If Not ae Is Nothing Then
+        userType = -1
+        On Error Resume Next
+        userType = ae.AddressEntryUserType
+        On Error GoTo PROC_ERR
+
+        If userType = 0 Then  ' olExchangeUserAddressEntry
+            Set exUser = Nothing
+            On Error Resume Next
+            Set exUser = ae.GetExchangeUser
+            On Error GoTo PROC_ERR
+
+            If Not exUser Is Nothing Then
+                On Error Resume Next
+                result = LCase(exUser.PrimarySmtpAddress)
+                On Error GoTo PROC_ERR
+            End If
+        Else
+            On Error Resume Next
+            result = LCase(ae.Address)
+            On Error GoTo PROC_ERR
+        End If
+    End If
+
+    ' Fall back to Address property
+    If Len(result) = 0 Then
+        On Error Resume Next
+        result = LCase(recip.Address)
+        On Error GoTo PROC_ERR
+    End If
+
+    ResolveRecipientSmtp = result
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "BatchFilter", "ResolveRecipientSmtp", Err.Number, Err.Description
+    ResolveRecipientSmtp = ""
+    Resume PROC_EXIT
+End Function

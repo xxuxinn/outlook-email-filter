@@ -1,5 +1,5 @@
 '===============================================================================
-' Config.bas - Configuration Module for Email Agent v3.0
+' Config.bas - Configuration Module for Email Agent v3.1
 '===============================================================================
 ' This module contains:
 '   1. DEFAULT_* constants: compile-time fallback values
@@ -16,8 +16,8 @@ Option Explicit
 '-------------------------------------------------------------------------------
 ' VERSION
 '-------------------------------------------------------------------------------
-Public Const FILTER_VERSION As String = "3.0.0"
-Public Const FILTER_VERSION_DATE As String = "2026-02-19"
+Public Const FILTER_VERSION As String = "3.1.0"
+Public Const FILTER_VERSION_DATE As String = "2026-07-12"
 
 '-------------------------------------------------------------------------------
 ' RUNTIME VARIABLES (populated by LoadAllSettings at startup)
@@ -27,9 +27,9 @@ Public Const FILTER_VERSION_DATE As String = "2026-02-19"
 Public RuntimeEnableLogging As Boolean
 Public RuntimeLogLevel As String
 Public RuntimeEnableSelfImproving As Boolean
-Public RuntimeProgressInterval As Integer
-Public RuntimeDryRunLimit As Integer
-Public RuntimeLLMBatchSize As Integer
+Public RuntimeProgressInterval As Long
+Public RuntimeDryRunLimit As Long
+Public RuntimeLLMBatchSize As Long
 
 ' Folder names
 Public RuntimeFolderProtected As String
@@ -62,22 +62,33 @@ Public RuntimeAPIKeyMethod As String
 Public RuntimeAPIKeyEnvVar As String
 Public RuntimeAPIKeyHardcoded As String
 Public RuntimeLLMSystemPrompt As String
-Public RuntimeClassifyBodyChars As Integer
-Public RuntimeClassifyMaxTokens As Integer
-Public RuntimeSummarizeMaxTokens As Integer
-Public RuntimeReplyMaxTokens As Integer
+Public RuntimeClassifyBodyChars As Long
+Public RuntimeClassifyMaxTokens As Long
+Public RuntimeSummarizeMaxTokens As Long
+Public RuntimeReplyMaxTokens As Long
 Public RuntimeLLMTemperature As Double       ' Legacy / classify temperature
 Public RuntimeReplyTemperature As Double
+Public RuntimeLLMTimeoutSeconds As Long      ' HTTP receive timeout for LLM calls
+Public RuntimeConfidenceThreshold As Double  ' Min LLM confidence to act on DELETE (else Review)
 
 ' Agent
 Public RuntimeEnableAutoReply As Boolean
 Public RuntimeAutoReplyOnArrival As Boolean
 Public RuntimeFolderLearnReply As String
-Public RuntimeMaxReplyExamples As Integer
+Public RuntimeMaxReplyExamples As Long
 Public RuntimeReplyPersona As String
 Public RuntimeScanSentItems As Boolean
-Public RuntimeScanSentDays As Integer
+Public RuntimeScanSentDays As Long
 Public RuntimeAutoReplyForSenders As String
+Public RuntimeEnableTaskExtraction As Boolean    ' Create draft Outlook Tasks for deadlines found by digest
+Public RuntimeEnableContextEnrichment As Boolean ' Inject sender history into LLM classification prompts
+
+' Digest / rule mining
+Public RuntimeEnableDailyDigest As Boolean
+Public RuntimeDigestHour As Long             ' Hour of day (0-23) after which the daily digest runs
+Public RuntimeDigestMaxEmails As Long        ' Max emails included in one digest
+Public RuntimeDigestSendEmail As Boolean     ' Also send digest as a self-addressed email
+Public RuntimeEnableRuleMining As Boolean    ' Weekly LLM rule-proposal run
 
 ' Cloud sync
 Public RuntimeEnableCloudSync As Boolean
@@ -111,22 +122,33 @@ Public Const DEFAULT_LLM_SYSTEM_PROMPT As String = "You are filtering emails for
     "Respond with ONLY 'DELETE' or 'KEEP' followed by a brief reason (max 10 words). " & _
     "DELETE: Generic broadcasts, announcements, FYI-only, mass CC, admin notices, promotional, newsletters. " & _
     "KEEP: Personally addressed, requires action/response, from students/collaborators, important deadlines."
-Public Const DEFAULT_CLASSIFY_BODY_CHARS As Integer = 800
-Public Const DEFAULT_CLASSIFY_MAX_TOKENS As Integer = 100
-Public Const DEFAULT_SUMMARIZE_MAX_TOKENS As Integer = 300
-Public Const DEFAULT_REPLY_MAX_TOKENS As Integer = 800
+Public Const DEFAULT_CLASSIFY_BODY_CHARS As Long = 800
+Public Const DEFAULT_CLASSIFY_MAX_TOKENS As Long = 200
+Public Const DEFAULT_SUMMARIZE_MAX_TOKENS As Long = 300
+Public Const DEFAULT_REPLY_MAX_TOKENS As Long = 800
 Public Const DEFAULT_LLM_TEMPERATURE As Double = 0.3
 Public Const DEFAULT_REPLY_TEMPERATURE As Double = 0.7
+Public Const DEFAULT_LLM_TIMEOUT_SECONDS As Long = 60
+Public Const DEFAULT_CONFIDENCE_THRESHOLD As Double = 0.6
 
 ' Agent defaults
 Public Const DEFAULT_ENABLE_AUTO_REPLY As Boolean = False
 Public Const DEFAULT_AUTO_REPLY_ON_ARRIVAL As Boolean = False
 Public Const DEFAULT_FOLDER_LEARN_REPLY As String = "LearnReply"
-Public Const DEFAULT_MAX_REPLY_EXAMPLES As Integer = 5
+Public Const DEFAULT_MAX_REPLY_EXAMPLES As Long = 5
 Public Const DEFAULT_REPLY_PERSONA As String = ""
 Public Const DEFAULT_SCAN_SENT_ITEMS As Boolean = False
-Public Const DEFAULT_SCAN_SENT_DAYS As Integer = 30
+Public Const DEFAULT_SCAN_SENT_DAYS As Long = 30
 Public Const DEFAULT_AUTO_REPLY_FOR_SENDERS As String = ""
+Public Const DEFAULT_ENABLE_TASK_EXTRACTION As Boolean = False
+Public Const DEFAULT_ENABLE_CONTEXT_ENRICHMENT As Boolean = True
+
+' Digest / rule mining defaults
+Public Const DEFAULT_ENABLE_DAILY_DIGEST As Boolean = False
+Public Const DEFAULT_DIGEST_HOUR As Long = 8
+Public Const DEFAULT_DIGEST_MAX_EMAILS As Long = 50
+Public Const DEFAULT_DIGEST_SEND_EMAIL As Boolean = True
+Public Const DEFAULT_ENABLE_RULE_MINING As Boolean = False
 
 ' Cloud sync defaults
 Public Const DEFAULT_ENABLE_CLOUD_SYNC As Boolean = False
@@ -157,9 +179,9 @@ Public Const DEFAULT_ENABLE_LOGGING As Boolean = True
 Public Const DEFAULT_LOG_LEVEL As String = "INFO"
 
 ' Batch processing defaults
-Public Const DEFAULT_LLM_BATCH_SIZE As Integer = 10
-Public Const DEFAULT_PROGRESS_INTERVAL As Integer = 100
-Public Const DEFAULT_DRY_RUN_LIMIT As Integer = 50
+Public Const DEFAULT_LLM_BATCH_SIZE As Long = 10
+Public Const DEFAULT_PROGRESS_INTERVAL As Long = 100
+Public Const DEFAULT_DRY_RUN_LIMIT As Long = 50
 
 ' Self-improving defaults
 Public Const DEFAULT_ENABLE_SELF_IMPROVING As Boolean = True
@@ -176,9 +198,22 @@ Public Const LEARNED_SENDERS_FILE As String = "learned_senders.txt"
 Public Const LEARNED_SUBJECTS_FILE As String = "learned_subjects.txt"
 Public Const LEARNED_REPLIES_FILE As String = "learned_replies.txt"
 
+' Agent memory files (pipe-delimited, append-only)
+Public Const DECISION_LOG_FILE As String = "decision_log.txt"
+Public Const CORRECTIONS_FILE As String = "llm_corrections.txt"
+Public Const PROPOSALS_FILE As String = "rule_proposals.txt"
+
+' Subfolder for daily digest markdown files
+Public Const DIGESTS_SUBFOLDER As String = "digests"
+
 ' Settings and log file names
 Public Const SETTINGS_FILE_NAME As String = "settings.ini"
 Public Const ERROR_LOG_FILE_NAME As String = "error.log"
+
+' Log rotation caps (bytes)
+Public Const ERROR_LOG_MAX_BYTES As Long = 2097152    ' 2 MB
+Public Const LLM_DEBUG_LOG_MAX_BYTES As Long = 5242880 ' 5 MB
+Public Const DECISION_LOG_MAX_BYTES As Long = 5242880  ' 5 MB (~50k decisions)
 
 ' Call stack max depth
 Public Const CALL_STACK_MAX_DEPTH As Integer = 20

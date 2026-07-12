@@ -4,7 +4,7 @@ VBA cannot be invoked from outside Outlook, so we use a file-based IPC:
   1. Server writes a JSON command file to %APPDATA%\OutlookEmailFilter\commands\
   2. VBA polls that directory every 2 seconds, picks up the file
   3. VBA executes the macro, writes a result JSON file alongside
-  4. Server polls for the result file (or times out)
+  4. The browser polls the server for the result
 
 Command file format:  commands/<id>.json   {"id":"...", "macro":"...", "args":{}}
 Result file format:   commands/<id>.result {"id":"...", "status":"ok|error", "output":"..."}
@@ -16,108 +16,158 @@ import time
 import uuid
 from typing import Optional
 
-import settings_manager
+import config
 
-COMMANDS_DIR = os.path.join(settings_manager.SETTINGS_DIR, "commands")
-RESULT_TIMEOUT = 30  # seconds to wait for VBA result
-POLL_INTERVAL = 0.5  # seconds between result polls
+STALE_COMMAND_SECONDS = 10   # unconsumed .json older than this ⇒ poller inactive
+RESULT_SETTLE_SECONDS = 10   # unparseable .result younger than this ⇒ still being written
+RESULT_REREAD_DELAY = 0.2    # re-read delay for truncated result files
+STARTUP_CLEANUP_SECONDS = 3600
+_ID_ALLOC_ATTEMPTS = 5
 
 
 def _ensure_dir() -> None:
-    os.makedirs(COMMANDS_DIR, exist_ok=True)
+    os.makedirs(config.commands_dir(), exist_ok=True)
 
+
+def _path(cmd_id: str, ext: str) -> str:
+    return os.path.join(config.commands_dir(), f"{cmd_id}.{ext}")
+
+
+# ---------------------------------------------------------------------------
+# Send
+# ---------------------------------------------------------------------------
 
 def send_command(macro: str, args: Optional[dict] = None) -> str:
-    """Write a command file and return the command ID."""
-    _ensure_dir()
-    cmd_id = str(uuid.uuid4())[:8]
-    payload = {"id": cmd_id, "macro": macro, "args": args or {}}
-    path = os.path.join(COMMANDS_DIR, f"{cmd_id}.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f)
-    return cmd_id
+    """Write a command file and return the 8-hex-char command ID.
 
+    Uses open(..., "x") so an ID collision with an existing file raises and a
+    fresh ID is generated (max 5 attempts).
+    """
+    _ensure_dir()
+    payload_args = dict(args or {})
+    for _ in range(_ID_ALLOC_ATTEMPTS):
+        cmd_id = uuid.uuid4().hex[:8]
+        if os.path.exists(_path(cmd_id, "result")):
+            continue
+        try:
+            with open(_path(cmd_id, "json"), "x", encoding="utf-8") as f:
+                json.dump({"id": cmd_id, "macro": macro, "args": payload_args}, f)
+            return cmd_id
+        except FileExistsError:
+            continue
+    raise RuntimeError("Could not allocate a unique command id after 5 attempts")
+
+
+# ---------------------------------------------------------------------------
+# Receive
+# ---------------------------------------------------------------------------
 
 def get_result(cmd_id: str) -> Optional[dict]:
-    """Check for a result file. Returns None if not yet available."""
-    path = os.path.join(COMMANDS_DIR, f"{cmd_id}.result")
-    if not os.path.exists(path):
+    """Check for a result file.
+
+    Returns None while pending (no file, file locked, or file present but
+    still being written — i.e. unparseable and younger than 10 s). Once a
+    result is successfully returned, both <id>.result and any leftover
+    <id>.json are deleted (best-effort).
+    """
+    result_path = _path(cmd_id, "result")
+    if not os.path.exists(result_path):
         return None
 
-    # File exists — try to read it (with one retry for file-locking races)
-    for attempt in range(2):
-        try:
-            with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
-                raw = f.read()
-        except PermissionError:
-            # File may still be held by VBA — wait briefly and retry
-            print(f"[bridge] PermissionError reading {cmd_id}.result (attempt {attempt+1})")
-            time.sleep(0.3)
-            continue
-        except Exception as e:
-            print(f"[bridge] Error reading {cmd_id}.result: {e}")
-            return {"id": cmd_id, "status": "error", "output": f"Result file read error: {e}"}
+    raw = _read_raw(result_path)
+    if raw is None:
+        return None  # locked by the writer — treat as pending
 
-        raw = raw.strip()
-        if not raw:
-            print(f"[bridge] Empty result file for {cmd_id}")
-            return {"id": cmd_id, "status": "error", "output": "Result file is empty"}
+    data = _parse_result(raw)
+    if data is None:
+        # Possibly truncated mid-write: re-read once after a short delay.
+        time.sleep(RESULT_REREAD_DELAY)
+        raw2 = _read_raw(result_path)
+        if raw2 is not None:
+            raw = raw2
+            data = _parse_result(raw)
 
-        # Try JSON parse
-        try:
-            data = json.loads(raw)
-            print(f"[bridge] Result OK for {cmd_id}: status={data.get('status')}, len={len(data.get('output', ''))}")
-            return data
-        except (json.JSONDecodeError, ValueError) as e:
-            print(f"[bridge] JSON parse failed for {cmd_id}: {e}")
-            print(f"[bridge] Raw content: {raw[:300]}")
-            # Return raw content as-is rather than losing the result
-            return {"id": cmd_id, "status": "ok", "output": raw}
+    if data is None:
+        if _file_age(result_path) <= RESULT_SETTLE_SECONDS:
+            return None  # give the writer time to finish — still pending
+        data = {
+            "id": cmd_id,
+            "status": "error",
+            "output": raw.strip() or "Result file is empty or unparseable",
+        }
 
-    # Both read attempts failed (PermissionError)
-    return {"id": cmd_id, "status": "error", "output": "Result file locked by another process"}
+    _cleanup_pair(cmd_id)
+    return data
 
 
-def wait_for_result(cmd_id: str, timeout: float = RESULT_TIMEOUT) -> dict:
-    """Poll for a result file until timeout. Returns result dict or timeout error."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        result = get_result(cmd_id)
-        if result is not None:
-            # Clean up files
-            try:
-                os.remove(os.path.join(COMMANDS_DIR, f"{cmd_id}.json"))
-                os.remove(os.path.join(COMMANDS_DIR, f"{cmd_id}.result"))
-            except OSError:
-                pass
-            return result
-        time.sleep(POLL_INTERVAL)
-    # Timeout — clean up command file if still there
+def _read_raw(path: str) -> Optional[str]:
     try:
-        os.remove(os.path.join(COMMANDS_DIR, f"{cmd_id}.json"))
+        with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
+            return f.read()
+    except (OSError, PermissionError):
+        return None
+
+
+def _parse_result(raw: str) -> Optional[dict]:
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    try:
+        data = json.loads(stripped)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _file_age(path: str) -> float:
+    try:
+        return time.time() - os.path.getmtime(path)
     except OSError:
-        pass
-    return {"id": cmd_id, "status": "timeout", "output": "No response from Outlook within timeout"}
+        return 0.0
 
 
-def list_pending_commands() -> list[str]:
-    """List IDs of commands that have been sent but not yet picked up."""
+def _cleanup_pair(cmd_id: str) -> None:
+    for ext in ("result", "json"):
+        try:
+            os.remove(_path(cmd_id, ext))
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Health & housekeeping
+# ---------------------------------------------------------------------------
+
+def poller_health() -> dict:
+    """Detect a dead Outlook poller: unconsumed .json files older than 10 s."""
     _ensure_dir()
-    return [f[:-5] for f in os.listdir(COMMANDS_DIR) if f.endswith(".json")]
+    now = time.time()
+    stale = 0
+    for fname in os.listdir(config.commands_dir()):
+        if not fname.endswith(".json"):
+            continue
+        try:
+            if now - os.path.getmtime(os.path.join(config.commands_dir(), fname)) \
+                    > STALE_COMMAND_SECONDS:
+                stale += 1
+        except OSError:
+            pass
+    return {"stale_commands": stale, "poller_responsive": stale == 0}
 
 
-def cleanup_old_results(max_age_seconds: int = 300) -> int:
-    """Remove .result files older than max_age_seconds. Returns count removed."""
+def cleanup_old_files(max_age_seconds: int = STARTUP_CLEANUP_SECONDS) -> int:
+    """Remove .json and .result files older than max_age_seconds."""
     _ensure_dir()
     now = time.time()
     removed = 0
-    for f in os.listdir(COMMANDS_DIR):
-        if f.endswith(".result"):
-            path = os.path.join(COMMANDS_DIR, f)
-            try:
-                if now - os.path.getmtime(path) > max_age_seconds:
-                    os.remove(path)
-                    removed += 1
-            except OSError:
-                pass
+    for fname in os.listdir(config.commands_dir()):
+        if not (fname.endswith(".json") or fname.endswith(".result")):
+            continue
+        path = os.path.join(config.commands_dir(), fname)
+        try:
+            if now - os.path.getmtime(path) > max_age_seconds:
+                os.remove(path)
+                removed += 1
+        except OSError:
+            pass
     return removed

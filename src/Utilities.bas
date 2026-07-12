@@ -1,18 +1,21 @@
 '===============================================================================
-' Utilities.bas - Helper Functions for Email Agent v3.0
+' Utilities.bas - Helper Functions for Email Agent v3.1
 '===============================================================================
 ' This module contains utility functions used across the email filter:
 '   - String matching (ContainsAny, StartsWithAny, MatchesAny)
-'   - JSON encoding/parsing
+'   - JSON encoding/parsing (robust key extraction, escape-aware)
+'   - UTF-8 file I/O helpers (settings + learned data files are UTF-8 w/ BOM)
 '   - Folder management
-'   - Logging
+'   - Logging (with size-capped rotation)
 '   - Email address extraction
 '   - Learned senders/subjects cache (in-memory Dictionary + file I/O)
 '   - Settings INI reader/writer
 '   - Learned rule deletion
 '   - Call stack tracking and centralized error handling
-'   - Multi-provider LLM caller (CallLLM)
+'   - Multi-provider LLM caller (CallLLM) with HTTP timeouts
 '   - Reply pair I/O (learned_replies.txt)
+'
+' The Web UI command bridge (poller + dispatcher) lives in Bridge.bas (v3.1).
 '===============================================================================
 
 Option Explicit
@@ -34,26 +37,6 @@ Private learnedSendersCacheLoaded As Boolean
 ' Learned subjects cache (Self-Improving Filter - Subject Rules)
 Private learnedSubjectsCache As Object  ' Scripting.Dictionary (subject -> "DELETE")
 Private learnedSubjectsCacheLoaded As Boolean
-
-' Web UI command poller state
-Private pollerRunningFlag As Boolean
-
-' Windows API timer for command poller (Outlook has no Application.OnTime)
-#If VBA7 Then
-    Private Declare PtrSafe Function SetTimer Lib "user32" ( _
-        ByVal hWnd As LongPtr, ByVal nIDEvent As LongPtr, _
-        ByVal uElapse As Long, ByVal lpTimerFunc As LongPtr) As LongPtr
-    Private Declare PtrSafe Function KillTimer Lib "user32" ( _
-        ByVal hWnd As LongPtr, ByVal nIDEvent As LongPtr) As Long
-    Private pollerTimerId As LongPtr
-#Else
-    Private Declare Function SetTimer Lib "user32" ( _
-        ByVal hWnd As Long, ByVal nIDEvent As Long, _
-        ByVal uElapse As Long, ByVal lpTimerFunc As Long) As Long
-    Private Declare Function KillTimer Lib "user32" ( _
-        ByVal hWnd As Long, ByVal nIDEvent As Long) As Long
-    Private pollerTimerId As Long
-#End If
 
 Public Sub PushCallStack(ByVal procName As String)
     If callStackDepth < CALL_STACK_MAX_DEPTH Then
@@ -136,11 +119,24 @@ Public Sub WriteToLogFile(ByVal message As String)
     End If
 
     Set fso = CreateObject("Scripting.FileSystemObject")
+    RotateLogIfOversize fso, logPath, ERROR_LOG_MAX_BYTES
     Set ts = fso.OpenTextFile(logPath, 8, True)  ' 8 = ForAppending, True = create if missing
     ts.WriteLine message
     ts.Close
     Set ts = Nothing
     Set fso = Nothing
+End Sub
+
+' Rotate a log file to <name>.old when it exceeds maxBytes (replacing any
+' previous .old). Best-effort: callers already run under On Error Resume Next.
+Private Sub RotateLogIfOversize(ByVal fso As Object, ByVal logPath As String, ByVal maxBytes As Long)
+    If Not fso.FileExists(logPath) Then Exit Sub
+    If fso.GetFile(logPath).Size <= maxBytes Then Exit Sub
+
+    Dim oldPath As String
+    oldPath = logPath & ".old"
+    If fso.FileExists(oldPath) Then fso.DeleteFile oldPath, True
+    fso.MoveFile logPath, oldPath
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -152,7 +148,7 @@ End Sub
 ' backwards-compatibility but now delegates here).
 
 Public Function CallLLM(ByVal userPrompt As String, ByVal systemPrompt As String, _
-                        ByVal maxTokens As Integer, _
+                        ByVal maxTokens As Long, _
                         Optional ByVal temperature As Double = -1) As String
     On Error GoTo LLMError
     PushCallStack "Utilities.CallLLM"
@@ -189,15 +185,24 @@ LLMError:
     Resume PROC_EXIT
 End Function
 
-' Build OpenAI-compatible chat/completions JSON body (shared by azure & local)
+' Build OpenAI-compatible chat/completions JSON body.
+' Pass modelName = "" to omit the model field (Azure encodes it in the URL).
 Private Function BuildOpenAIBody(ByVal userPrompt As String, ByVal systemPrompt As String, _
-                                  ByVal maxTokens As Integer, ByVal temp As Double) As String
+                                  ByVal maxTokens As Long, ByVal temp As Double, _
+                                  Optional ByVal modelName As String = "") As String
     ' Force "." decimal separator regardless of Windows locale
     Dim tempStr As String
     tempStr = Format(temp, "0.00")
     tempStr = Replace(tempStr, ",", ".")
 
-    BuildOpenAIBody = "{" & _
+    Dim modelPart As String
+    If Len(modelName) > 0 Then
+        modelPart = """model"":""" & EscapeJSON(modelName) & ""","
+    Else
+        modelPart = ""
+    End If
+
+    BuildOpenAIBody = "{" & modelPart & _
         """messages"":[" & _
             "{""role"":""system"",""content"":""" & EscapeJSON(systemPrompt) & """}," & _
             "{""role"":""user"",""content"":""" & EscapeJSON(userPrompt) & """}" & _
@@ -208,31 +213,33 @@ Private Function BuildOpenAIBody(ByVal userPrompt As String, ByVal systemPrompt 
     "}"
 End Function
 
+' Create an HTTP client with real timeouts. ServerXMLHTTP (unlike XMLHTTP)
+' supports setTimeouts, so a stalled LLM endpoint can no longer freeze
+' the Outlook UI thread indefinitely.
+Private Function CreateHTTPClient() As Object
+    Dim http As Object
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+
+    Dim receiveMs As Long
+    receiveMs = RuntimeLLMTimeoutSeconds * 1000
+    If receiveMs <= 0 Then receiveMs = DEFAULT_LLM_TIMEOUT_SECONDS * 1000
+
+    ' resolve, connect, send, receive (milliseconds)
+    http.setTimeouts 10000, 10000, 30000, receiveMs
+    Set CreateHTTPClient = http
+End Function
+
 ' Call local OpenAI-compatible endpoint (Ollama, LM Studio, Inferencer, etc.)
 Private Function CallLLMLocal(ByVal userPrompt As String, ByVal systemPrompt As String, _
-                               ByVal maxTokens As Integer, ByVal temp As Double) As String
+                               ByVal maxTokens As Long, ByVal temp As Double) As String
     Dim http As Object
     Dim body As String
 
-    ' Inject model name into body for local servers
-    Dim tempStr As String
-    tempStr = Format(temp, "0.00")
-    tempStr = Replace(tempStr, ",", ".")
-
-    body = "{" & _
-        """model"":""" & RuntimeLocalModel & """," & _
-        """messages"":[" & _
-            "{""role"":""system"",""content"":""" & EscapeJSON(systemPrompt) & """}," & _
-            "{""role"":""user"",""content"":""" & EscapeJSON(userPrompt) & """}" & _
-        "]," & _
-        """max_tokens"":" & maxTokens & "," & _
-        """temperature"":" & tempStr & "," & _
-        """stream"":false" & _
-    "}"
+    body = BuildOpenAIBody(userPrompt, systemPrompt, maxTokens, temp, RuntimeLocalModel)
 
     LogMessage "DEBUG", "Calling local LLM at " & RuntimeLocalEndpoint & " (model: " & RuntimeLocalModel & ")"
 
-    Set http = CreateObject("MSXML2.XMLHTTP")
+    Set http = CreateHTTPClient()
     http.Open "POST", RuntimeLocalEndpoint, False
     http.setRequestHeader "Content-Type", "application/json"
     ' Local servers typically accept any key or no key; provide a dummy to avoid rejections
@@ -259,7 +266,7 @@ End Function
 ' Call external OpenAI-compatible endpoint (OpenRouter, Groq, Together AI, OpenAI, etc.)
 ' Unlike CallLLMLocal, this requires a real API key via GetAPIKey().
 Private Function CallLLMOpenAI(ByVal userPrompt As String, ByVal systemPrompt As String, _
-                                ByVal maxTokens As Integer, ByVal temp As Double) As String
+                                ByVal maxTokens As Long, ByVal temp As Double) As String
     On Error GoTo PROC_ERR
     PushCallStack "Utilities.CallLLMOpenAI"
 
@@ -273,26 +280,12 @@ Private Function CallLLMOpenAI(ByVal userPrompt As String, ByVal systemPrompt As
         GoTo PROC_EXIT
     End If
 
-    ' Build body with model name (OpenAI-compatible format)
-    Dim tempStr As String
-    tempStr = Format(temp, "0.00")
-    tempStr = Replace(tempStr, ",", ".")
-
     Dim body As String
-    body = "{" & _
-        """model"":""" & RuntimeOpenAIModel & """," & _
-        """messages"":[" & _
-            "{""role"":""system"",""content"":""" & EscapeJSON(systemPrompt) & """}," & _
-            "{""role"":""user"",""content"":""" & EscapeJSON(userPrompt) & """}" & _
-        "]," & _
-        """max_tokens"":" & maxTokens & "," & _
-        """temperature"":" & tempStr & "," & _
-        """stream"":false" & _
-    "}"
+    body = BuildOpenAIBody(userPrompt, systemPrompt, maxTokens, temp, RuntimeOpenAIModel)
 
     LogMessage "DEBUG", "Calling OpenAI-compatible API at " & RuntimeOpenAIEndpoint & " (model: " & RuntimeOpenAIModel & ")"
 
-    Set http = CreateObject("MSXML2.XMLHTTP")
+    Set http = CreateHTTPClient()
     http.Open "POST", RuntimeOpenAIEndpoint, False
     http.setRequestHeader "Content-Type", "application/json"
     http.setRequestHeader "Authorization", "Bearer " & apiKey
@@ -325,7 +318,7 @@ End Function
 
 ' Call Azure OpenAI endpoint
 Private Function CallLLMAzure(ByVal userPrompt As String, ByVal systemPrompt As String, _
-                               ByVal maxTokens As Integer, ByVal temp As Double) As String
+                               ByVal maxTokens As Long, ByVal temp As Double) As String
     Dim http As Object
     Dim apiKey As String
 
@@ -341,7 +334,7 @@ Private Function CallLLMAzure(ByVal userPrompt As String, ByVal systemPrompt As 
 
     LogMessage "DEBUG", "Calling Azure OpenAI..."
 
-    Set http = CreateObject("MSXML2.XMLHTTP")
+    Set http = CreateHTTPClient()
     http.Open "POST", RuntimeLLMEndpoint, False
     http.setRequestHeader "Content-Type", "application/json"
     http.setRequestHeader "api-key", apiKey
@@ -366,7 +359,7 @@ End Function
 
 ' Call Anthropic Claude API (/v1/messages - different schema from OpenAI)
 Private Function CallLLMClaude(ByVal userPrompt As String, ByVal systemPrompt As String, _
-                                ByVal maxTokens As Integer, ByVal temp As Double) As String
+                                ByVal maxTokens As Long, ByVal temp As Double) As String
     Dim http As Object
     Dim apiKey As String
 
@@ -397,7 +390,7 @@ Private Function CallLLMClaude(ByVal userPrompt As String, ByVal systemPrompt As
 
     LogMessage "DEBUG", "Calling Claude API (model: " & RuntimeClaudeModel & ")..."
 
-    Set http = CreateObject("MSXML2.XMLHTTP")
+    Set http = CreateHTTPClient()
     http.Open "POST", RuntimeClaudeEndpoint, False
     http.setRequestHeader "Content-Type", "application/json"
     http.setRequestHeader "x-api-key", apiKey
@@ -406,31 +399,8 @@ Private Function CallLLMClaude(ByVal userPrompt As String, ByVal systemPrompt As
 
     If http.Status = 200 Then
         ' Claude response format: {"content":[{"type":"text","text":"..."}],...}
-        ' We reuse ParseJSONContent but must find "text" field inside the content array
-        Dim rawResponse As String
-        rawResponse = http.responseText
-
-        ' Try to extract the first text block from Claude's response
-        Dim textStart As Long
-        textStart = InStr(1, rawResponse, """text"":", vbTextCompare)
-        If textStart > 0 Then
-            textStart = InStr(textStart, rawResponse, ":""") + 2
-            Dim textEnd As Long
-            textEnd = textStart
-            Do
-                textEnd = InStr(textEnd + 1, rawResponse, """")
-                If textEnd = 0 Then Exit Do
-                If Mid(rawResponse, textEnd - 1, 1) <> "\" Then Exit Do
-            Loop
-            Dim claudeResult As String
-            If textEnd > textStart Then
-                claudeResult = Mid(rawResponse, textStart, textEnd - textStart)
-                claudeResult = Replace(claudeResult, "\n", vbCrLf)
-                claudeResult = Replace(claudeResult, "\t", vbTab)
-                claudeResult = Replace(claudeResult, "\""", """")
-                claudeResult = Replace(claudeResult, "\\", "\")
-            End If
-        End If
+        Dim claudeResult As String
+        claudeResult = ExtractJSONStringValue(http.responseText, "text")
 
         LogMessage "DEBUG", "Claude LLM response: " & Left(claudeResult, 100)
         WriteLLMDebugLog "CallLLMClaude", RuntimeClaudeEndpoint, RuntimeClaudeModel, _
@@ -445,14 +415,6 @@ Private Function CallLLMClaude(ByVal userPrompt As String, ByVal systemPrompt As
 
     Set http = Nothing
 End Function
-
-'-------------------------------------------------------------------------------
-' LEARNED SENDERS CACHE (Self-Improving Filter)
-'-------------------------------------------------------------------------------
-
-'-------------------------------------------------------------------------------
-' LEARNED SUBJECTS CACHE (Self-Improving Filter - Subject Rules)
-'-------------------------------------------------------------------------------
 
 '-------------------------------------------------------------------------------
 ' STRING MATCHING FUNCTIONS
@@ -532,7 +494,10 @@ End Function
 ' JSON FUNCTIONS
 '-------------------------------------------------------------------------------
 
-' Escape a string for JSON encoding
+' Escape a string for JSON encoding.
+' Handles backslash, quote, named control chars, and strips/escapes ALL
+' remaining chars < 0x20 (a crafted email with e.g. a vertical tab could
+' otherwise produce structurally invalid JSON and break its own classification).
 Public Function EscapeJSON(ByVal text As String) As String
     Dim result As String
 
@@ -544,58 +509,365 @@ Public Function EscapeJSON(ByVal text As String) As String
     ' Escape double quotes
     result = Replace(result, """", "\""")
 
-    ' Escape control characters
+    ' Escape named control characters
     result = Replace(result, vbCrLf, "\n")
     result = Replace(result, vbCr, "\n")
     result = Replace(result, vbLf, "\n")
     result = Replace(result, vbTab, "\t")
+    result = Replace(result, Chr(8), "\b")
+    result = Replace(result, Chr(12), "\f")
+
+    ' Strip any remaining control characters (0x00-0x1F)
+    Dim i As Long
+    For i = 0 To 31
+        Select Case i
+            Case 8, 9, 10, 12, 13  ' already handled above
+            Case Else
+                If InStr(1, result, Chr(i)) > 0 Then
+                    result = Replace(result, Chr(i), "")
+                End If
+        End Select
+    Next i
 
     EscapeJSON = result
 End Function
 
-' Parse a simple JSON response to extract the "content" field
-' This is a basic parser - for complex JSON, consider a library
-Public Function ParseJSONContent(ByVal jsonText As String) As String
-    Dim startPos As Long
-    Dim endPos As Long
-    Dim content As String
+' Unescape a JSON string value. Uses a placeholder for "\\" so that a literal
+' backslash followed by 'n' does not get mangled into a newline (the old
+' replace-order bug garbled Windows paths in LLM output).
+Public Function UnescapeJSON(ByVal text As String) As String
+    Dim result As String
+    Dim marker As String
+    marker = Chr(1)  ' unused control char as temporary placeholder
 
-    ' Look for "content": " pattern
-    startPos = InStr(1, jsonText, """content"":", vbTextCompare)
+    result = Replace(text, "\\", marker)
+    result = Replace(result, "\n", vbCrLf)
+    result = Replace(result, "\r", "")
+    result = Replace(result, "\t", vbTab)
+    result = Replace(result, "\""", """")
+    result = Replace(result, "\/", "/")
+    result = Replace(result, marker, "\")
 
-    If startPos = 0 Then
-        ParseJSONContent = ""
-        Exit Function
-    End If
+    UnescapeJSON = result
+End Function
 
-    ' Find the opening quote of the value
-    startPos = InStr(startPos, jsonText, ":""") + 2
+' Extract a JSON string value by key, robustly:
+'   - tolerates any whitespace between the colon and the opening quote
+'   - returns "" for null / non-string values instead of grabbing a later field
+'   - escape detection counts consecutive preceding backslashes, so \\" is
+'     correctly recognised as escaped-backslash + closing quote
+' Searches from startAt (default 1); returns "" if key not found.
+Public Function ExtractJSONStringValue(ByVal jsonText As String, ByVal key As String, _
+                                       Optional ByVal startAt As Long = 1) As String
+    ExtractJSONStringValue = ""
 
-    If startPos < 3 Then
-        ParseJSONContent = ""
-        Exit Function
-    End If
+    Dim keyToken As String
+    keyToken = """" & key & """"
 
-    ' Find the closing quote (handle escaped quotes)
-    endPos = startPos
-    Do
-        endPos = InStr(endPos + 1, jsonText, """")
-        If endPos = 0 Then Exit Do
-        ' Check if this quote is escaped
-        If Mid(jsonText, endPos - 1, 1) <> "\" Then Exit Do
+    Dim keyPos As Long
+    keyPos = InStr(startAt, jsonText, keyToken, vbTextCompare)
+    If keyPos = 0 Then Exit Function
+
+    ' Find the colon after the key
+    Dim pos As Long
+    pos = keyPos + Len(keyToken)
+    Do While pos <= Len(jsonText) And Mid(jsonText, pos, 1) <> ":"
+        If InStr(1, " " & vbTab & vbCr & vbLf, Mid(jsonText, pos, 1)) = 0 Then Exit Function
+        pos = pos + 1
     Loop
+    If pos > Len(jsonText) Then Exit Function
+    pos = pos + 1  ' skip the colon
 
-    If endPos > startPos Then
-        content = Mid(jsonText, startPos, endPos - startPos)
-        ' Unescape the content
-        content = Replace(content, "\n", vbCrLf)
-        content = Replace(content, "\t", vbTab)
-        content = Replace(content, "\""", """")
-        content = Replace(content, "\\", "\")
-        ParseJSONContent = content
+    ' Skip whitespace after the colon
+    Do While pos <= Len(jsonText) And InStr(1, " " & vbTab & vbCr & vbLf, Mid(jsonText, pos, 1)) > 0
+        pos = pos + 1
+    Loop
+    If pos > Len(jsonText) Then Exit Function
+
+    ' Value must be a string; null/number/object -> return ""
+    If Mid(jsonText, pos, 1) <> """" Then Exit Function
+
+    Dim valueStart As Long
+    valueStart = pos + 1
+
+    ' Scan for the closing quote, counting preceding backslashes
+    Dim endPos As Long
+    Dim backslashes As Long
+    Dim scanPos As Long
+    endPos = 0
+    scanPos = valueStart
+    Do While scanPos <= Len(jsonText)
+        If Mid(jsonText, scanPos, 1) = """" Then
+            ' Count consecutive backslashes immediately before this quote
+            backslashes = 0
+            Do While scanPos - backslashes - 1 >= valueStart And _
+                     Mid(jsonText, scanPos - backslashes - 1, 1) = "\"
+                backslashes = backslashes + 1
+            Loop
+            If backslashes Mod 2 = 0 Then
+                endPos = scanPos
+                Exit Do
+            End If
+        End If
+        scanPos = scanPos + 1
+    Loop
+    If endPos = 0 Then Exit Function
+
+    ExtractJSONStringValue = UnescapeJSON(Mid(jsonText, valueStart, endPos - valueStart))
+End Function
+
+' Extract a JSON numeric value by key (e.g. "confidence": 0.85 or "urgency": 3).
+' Returns defaultValue if the key is missing or the value is not numeric.
+' Locale-safe: JSON always uses "." which CDbl may reject on comma locales,
+' so the digits are parsed manually.
+Public Function ExtractJSONNumberValue(ByVal jsonText As String, ByVal key As String, _
+                                       ByVal defaultValue As Double, _
+                                       Optional ByVal startAt As Long = 1) As Double
+    ExtractJSONNumberValue = defaultValue
+
+    Dim keyToken As String
+    keyToken = """" & key & """"
+
+    Dim keyPos As Long
+    keyPos = InStr(startAt, jsonText, keyToken, vbTextCompare)
+    If keyPos = 0 Then Exit Function
+
+    Dim pos As Long
+    pos = keyPos + Len(keyToken)
+    Do While pos <= Len(jsonText) And Mid(jsonText, pos, 1) <> ":"
+        If InStr(1, " " & vbTab & vbCr & vbLf, Mid(jsonText, pos, 1)) = 0 Then Exit Function
+        pos = pos + 1
+    Loop
+    If pos > Len(jsonText) Then Exit Function
+    pos = pos + 1
+
+    Do While pos <= Len(jsonText) And InStr(1, " " & vbTab & vbCr & vbLf & """", Mid(jsonText, pos, 1)) > 0
+        pos = pos + 1
+    Loop
+    If pos > Len(jsonText) Then Exit Function
+
+    ' Collect number characters
+    Dim numStr As String
+    Dim ch As String
+    Do While pos <= Len(jsonText)
+        ch = Mid(jsonText, pos, 1)
+        If InStr(1, "0123456789.-+eE", ch) > 0 Then
+            numStr = numStr & ch
+            pos = pos + 1
+        Else
+            Exit Do
+        End If
+    Loop
+    If Len(numStr) = 0 Then Exit Function
+
+    ' Manual locale-safe parse of the common "int.frac" shape
+    On Error GoTo ParseFail
+    Dim dotPos As Long
+    dotPos = InStr(1, numStr, ".")
+    If dotPos = 0 Then
+        ExtractJSONNumberValue = CDbl(CLng(numStr))
     Else
-        ParseJSONContent = ""
+        Dim intPart As String
+        Dim fracPart As String
+        intPart = Left(numStr, dotPos - 1)
+        fracPart = Mid(numStr, dotPos + 1)
+        If Len(intPart) = 0 Or intPart = "-" Then intPart = intPart & "0"
+        If Len(fracPart) = 0 Then fracPart = "0"
+        Dim sign As Double
+        sign = IIf(Left(intPart, 1) = "-", -1, 1)
+        ExtractJSONNumberValue = CDbl(CLng(Replace(intPart, "-", ""))) + CDbl(CLng(fracPart)) / (10 ^ Len(fracPart))
+        ExtractJSONNumberValue = ExtractJSONNumberValue * sign
     End If
+    Exit Function
+ParseFail:
+    ExtractJSONNumberValue = defaultValue
+End Function
+
+' Parse a chat/completions JSON response to extract the "content" field.
+' Delegates to the robust escape-aware extractor.
+Public Function ParseJSONContent(ByVal jsonText As String) As String
+    ParseJSONContent = ExtractJSONStringValue(jsonText, "content")
+End Function
+
+'-------------------------------------------------------------------------------
+' UTF-8 FILE I/O HELPERS (v3.1)
+'-------------------------------------------------------------------------------
+' settings.ini and all learned data files are UTF-8 with BOM as of v3.1 so the
+' Python Web UI / MCP server and VBA agree on encoding (Chinese patterns like
+' 優惠 previously corrupted across the ANSI/UTF-8 boundary).
+' Legacy ANSI files are detected by missing BOM and migrated on first write.
+
+' Read an entire text file. If it starts with a UTF-8 BOM, read as UTF-8;
+' otherwise read as ANSI (legacy files written before v3.1).
+Public Function ReadTextFileSmart(ByVal filePath As String) As String
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.ReadTextFileSmart"
+
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    ReadTextFileSmart = ""
+    If Not fso.FileExists(filePath) Then GoTo PROC_EXIT
+    If fso.GetFile(filePath).Size = 0 Then GoTo PROC_EXIT
+
+    If FileHasUTF8BOM(filePath) Then
+        Dim stm As Object
+        Set stm = CreateObject("ADODB.Stream")
+        stm.Type = 2            ' adTypeText
+        stm.Charset = "utf-8"
+        stm.Open
+        stm.LoadFromFile filePath
+        ReadTextFileSmart = stm.ReadText(-1)  ' adReadAll
+        stm.Close
+        Set stm = Nothing
+    Else
+        Dim ts As Object
+        Set ts = fso.OpenTextFile(filePath, 1)  ' ForReading, ANSI
+        If Not ts.AtEndOfStream Then ReadTextFileSmart = ts.ReadAll
+        ts.Close
+        Set ts = Nothing
+    End If
+
+PROC_EXIT:
+    Set fso = Nothing
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "Utilities", "ReadTextFileSmart", Err.Number, Err.Description, filePath
+    ReadTextFileSmart = ""
+    Resume PROC_EXIT
+End Function
+
+' True if the file starts with the UTF-8 BOM (EF BB BF)
+Private Function FileHasUTF8BOM(ByVal filePath As String) As Boolean
+    On Error GoTo NoBOM
+
+    Dim stm As Object
+    Set stm = CreateObject("ADODB.Stream")
+    stm.Type = 1  ' adTypeBinary
+    stm.Open
+    stm.LoadFromFile filePath
+    If stm.Size >= 3 Then
+        Dim head() As Byte
+        head = stm.Read(3)
+        FileHasUTF8BOM = (head(0) = 239 And head(1) = 187 And head(2) = 191)
+    End If
+    stm.Close
+    Set stm = Nothing
+    Exit Function
+NoBOM:
+    FileHasUTF8BOM = False
+End Function
+
+' Write an entire text file as UTF-8 with BOM (overwrite)
+Public Sub WriteTextFileUTF8(ByVal filePath As String, ByVal content As String)
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.WriteTextFileUTF8"
+
+    Dim stm As Object
+    Set stm = CreateObject("ADODB.Stream")
+    stm.Type = 2            ' adTypeText
+    stm.Charset = "utf-8"   ' ADODB writes the BOM for utf-8
+    stm.Open
+    stm.WriteText content
+    stm.SaveToFile filePath, 2  ' adSaveCreateOverWrite
+    stm.Close
+    Set stm = Nothing
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "Utilities", "WriteTextFileUTF8", Err.Number, Err.Description, filePath
+    Resume PROC_EXIT
+End Sub
+
+' Append one line to a UTF-8 file as a TRUE append (binary Put at EOF — no
+' full-file read/rewrite, so a crash mid-write cannot destroy existing data
+' and the cost stays O(line), not O(file)). If the file exists without a BOM
+' (legacy ANSI), it is migrated to UTF-8 once; new/empty files get a BOM so
+' all readers detect UTF-8.
+Public Sub AppendLineUTF8(ByVal filePath As String, ByVal lineText As String)
+    Dim fnum As Integer
+    fnum = 0
+
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.AppendLineUTF8"
+
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    Dim needsBom As Boolean
+    needsBom = False
+
+    If fso.FileExists(filePath) Then
+        If fso.GetFile(filePath).Size = 0 Then
+            needsBom = True
+        ElseIf Not FileHasUTF8BOM(filePath) Then
+            ' One-time migration of a legacy ANSI file to UTF-8 with BOM
+            WriteTextFileUTF8 filePath, ReadTextFileSmart(filePath)
+        End If
+    Else
+        needsBom = True
+    End If
+    Set fso = Nothing
+
+    Dim bytes() As Byte
+    bytes = StringToUtf8Bytes(lineText & vbCrLf)
+
+    fnum = FreeFile
+    Open filePath For Binary Access Write As #fnum
+    If needsBom Then
+        Dim bom(0 To 2) As Byte
+        bom(0) = 239: bom(1) = 187: bom(2) = 191
+        Put #fnum, LOF(fnum) + 1, bom
+    End If
+    Put #fnum, LOF(fnum) + 1, bytes
+    Close #fnum
+    fnum = 0
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "Utilities", "AppendLineUTF8", Err.Number, Err.Description, filePath
+    On Error Resume Next
+    If fnum <> 0 Then Close #fnum
+    GoTo PROC_EXIT
+End Sub
+
+' Encode a VBA string as UTF-8 bytes WITHOUT the BOM (ADODB writes one; we
+' strip it so appended chunks never inject mid-file BOMs).
+Private Function StringToUtf8Bytes(ByVal s As String) As Byte()
+    Dim stm As Object
+    Set stm = CreateObject("ADODB.Stream")
+    stm.Type = 2            ' adTypeText
+    stm.Charset = "utf-8"
+    stm.Open
+    stm.WriteText s
+    stm.Position = 0
+    stm.Type = 1            ' adTypeBinary
+    stm.Position = 3        ' skip the BOM
+    StringToUtf8Bytes = stm.Read(-1)  ' adReadAll
+    stm.Close
+    Set stm = Nothing
+End Function
+
+' Public rotation helper for data files that grow unbounded (e.g. decision_log.txt)
+Public Sub RotateFileIfOversize(ByVal filePath As String, ByVal maxBytes As Long)
+    On Error Resume Next
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    RotateLogIfOversize fso, filePath, maxBytes
+    Set fso = Nothing
+End Sub
+
+' Split file content into lines, tolerating CRLF and bare LF
+Public Function SplitLines(ByVal content As String) As Variant
+    Dim normalized As String
+    normalized = Replace(content, vbCrLf, vbLf)
+    normalized = Replace(normalized, vbCr, vbLf)
+    SplitLines = Split(normalized, vbLf)
 End Function
 
 '-------------------------------------------------------------------------------
@@ -772,8 +1044,11 @@ Public Function GetDomain(ByVal email As String) As String
 End Function
 
 ' Truncate text to a maximum length with ellipsis
-Public Function Truncate(ByVal text As String, ByVal maxLength As Integer) As String
-    If Len(text) <= maxLength Then
+Public Function Truncate(ByVal text As String, ByVal maxLength As Long) As String
+    If maxLength <= 3 Then
+        ' Guard: Left(text, negative) raises error 5
+        Truncate = Left(text, IIf(maxLength < 0, 0, maxLength))
+    ElseIf Len(text) <= maxLength Then
         Truncate = text
     Else
         Truncate = Left(text, maxLength - 3) & "..."
@@ -876,7 +1151,7 @@ End Function
 ' Write verbose LLM request/response to llm_debug.log (only when LogLevel=DEBUG).
 ' Best-effort: failures here never break LLM calls.
 Private Sub WriteLLMDebugLog(ByVal provider As String, ByVal endpoint As String, _
-                              ByVal model As String, ByVal maxTokens As Integer, _
+                              ByVal model As String, ByVal maxTokens As Long, _
                               ByVal temperature As Double, ByVal requestBody As String, _
                               ByVal httpStatus As Long, ByVal responseBody As String, _
                               ByVal parsedContent As String)
@@ -895,6 +1170,7 @@ Private Sub WriteLLMDebugLog(ByVal provider As String, ByVal endpoint As String,
     tempStr = Replace(tempStr, ",", ".")
 
     Set fso = CreateObject("Scripting.FileSystemObject")
+    RotateLogIfOversize fso, logPath, LLM_DEBUG_LOG_MAX_BYTES
     Set ts = fso.OpenTextFile(logPath, 8, True)  ' 8 = ForAppending, True = create if missing
     ts.WriteLine String(80, "=")
     ts.WriteLine Format(Now, "yyyy-mm-dd hh:nn:ss") & " | " & provider & " | " & model & " | " & endpoint
@@ -913,7 +1189,12 @@ End Sub
 ' Load all settings from the INI file into Runtime* variables.
 ' If the INI file doesn't exist, creates one with defaults.
 ' MUST be called at the very start of Application_Startup.
+' A failing individual setting is logged and skipped (Resume Next) so one bad
+' value can no longer abort startup with half-applied configuration.
 Public Sub LoadAllSettings()
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.LoadAllSettings"
+
     Dim settingsPath As String
 
     settingsPath = GetSettingsFilePath()
@@ -973,6 +1254,8 @@ Public Sub LoadAllSettings()
     RuntimeLLMTemperature = ReadINIDouble("LLM", "Temperature", DEFAULT_LLM_TEMPERATURE)
     RuntimeReplyTemperature = ReadINIDouble("LLM", "ReplyTemperature", DEFAULT_REPLY_TEMPERATURE)
     RuntimeLLMSystemPrompt = ReadINISetting("LLM", "SystemPrompt", DEFAULT_LLM_SYSTEM_PROMPT)
+    RuntimeLLMTimeoutSeconds = ReadINIInt("LLM", "RequestTimeoutSeconds", DEFAULT_LLM_TIMEOUT_SECONDS)
+    RuntimeConfidenceThreshold = ReadINIDouble("LLM", "ConfidenceThreshold", DEFAULT_CONFIDENCE_THRESHOLD)
 
     ' --- Agent ---
     RuntimeEnableAutoReply = ReadINIBool("Agent", "EnableAutoReply", DEFAULT_ENABLE_AUTO_REPLY)
@@ -983,6 +1266,15 @@ Public Sub LoadAllSettings()
     RuntimeScanSentItems = ReadINIBool("Agent", "ScanSentItems", DEFAULT_SCAN_SENT_ITEMS)
     RuntimeScanSentDays = ReadINIInt("Agent", "ScanSentDays", DEFAULT_SCAN_SENT_DAYS)
     RuntimeAutoReplyForSenders = ReadINISetting("Agent", "AutoReplyForSenders", DEFAULT_AUTO_REPLY_FOR_SENDERS)
+    RuntimeEnableTaskExtraction = ReadINIBool("Agent", "EnableTaskExtraction", DEFAULT_ENABLE_TASK_EXTRACTION)
+    RuntimeEnableContextEnrichment = ReadINIBool("Agent", "EnableContextEnrichment", DEFAULT_ENABLE_CONTEXT_ENRICHMENT)
+
+    ' --- Digest / rule mining ---
+    RuntimeEnableDailyDigest = ReadINIBool("Digest", "EnableDailyDigest", DEFAULT_ENABLE_DAILY_DIGEST)
+    RuntimeDigestHour = ReadINIInt("Digest", "DigestHour", DEFAULT_DIGEST_HOUR)
+    RuntimeDigestMaxEmails = ReadINIInt("Digest", "DigestMaxEmails", DEFAULT_DIGEST_MAX_EMAILS)
+    RuntimeDigestSendEmail = ReadINIBool("Digest", "DigestSendEmail", DEFAULT_DIGEST_SEND_EMAIL)
+    RuntimeEnableRuleMining = ReadINIBool("Digest", "EnableRuleMining", DEFAULT_ENABLE_RULE_MINING)
 
     ' --- Sync ---
     RuntimeEnableCloudSync = ReadINIBool("Sync", "EnableCloudSync", DEFAULT_ENABLE_CLOUD_SYNC)
@@ -994,100 +1286,122 @@ Public Sub LoadAllSettings()
 
     RuntimeSettingsLoaded = True
     LogMessage "INFO", "Settings loaded from: " & settingsPath
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "Utilities", "LoadAllSettings", Err.Number, Err.Description
+    Resume Next  ' Skip the failing setting; ReadINI* fall back to defaults anyway
 End Sub
 
-' Write a default settings.ini from DEFAULT_* constants
+' Format a Double for INI storage with "." decimal separator on any locale
+Private Function FormatNumberForINI(ByVal value As Double) As String
+    FormatNumberForINI = Replace(Format(value, "0.00"), ",", ".")
+End Function
+
+' Write a default settings.ini from DEFAULT_* constants (UTF-8 with BOM)
 Public Sub CreateDefaultSettingsFile()
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.CreateDefaultSettingsFile"
+
     Dim filePath As String
-    Dim fso As Object
-    Dim ts As Object
+    Dim s As String
 
     filePath = GetSettingsFilePath()
 
-    On Error GoTo FileError
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    Set ts = fso.CreateTextFile(filePath, True)  ' True = overwrite
+    s = "[General]" & vbCrLf
+    s = s & "Version=" & FILTER_VERSION & vbCrLf
+    s = s & "EnableLogging=" & IIf(DEFAULT_ENABLE_LOGGING, "True", "False") & vbCrLf
+    s = s & "LogLevel=" & DEFAULT_LOG_LEVEL & vbCrLf
+    s = s & "EnableSelfImproving=" & IIf(DEFAULT_ENABLE_SELF_IMPROVING, "True", "False") & vbCrLf
+    s = s & "DebugMode=" & IIf(DEFAULT_DEBUG_MODE, "True", "False") & vbCrLf
+    s = s & "ProgressInterval=" & DEFAULT_PROGRESS_INTERVAL & vbCrLf
+    s = s & "DryRunLimit=" & DEFAULT_DRY_RUN_LIMIT & vbCrLf
+    s = s & "LLMBatchSize=" & DEFAULT_LLM_BATCH_SIZE & vbCrLf
+    s = s & vbCrLf
+    s = s & "[Folders]" & vbCrLf
+    s = s & "Protected=" & DEFAULT_FOLDER_PROTECTED & vbCrLf
+    s = s & "Review=" & DEFAULT_FOLDER_REVIEW & vbCrLf
+    s = s & "LearnKeep=" & DEFAULT_FOLDER_LEARN_KEEP & vbCrLf
+    s = s & "LearnDelete=" & DEFAULT_FOLDER_LEARN_DELETE & vbCrLf
+    s = s & "LearnSubject=" & DEFAULT_FOLDER_LEARN_SUBJECT_DELETE & vbCrLf
+    s = s & vbCrLf
+    s = s & "[Patterns]" & vbCrLf
+    s = s & "ProtectedDomains=" & DEFAULT_PROTECTED_DOMAINS & vbCrLf
+    s = s & "NamePatterns=" & DEFAULT_NAME_PATTERNS & vbCrLf
+    s = s & "GreetingPatterns=" & DEFAULT_GREETING_PATTERNS & vbCrLf
+    s = s & "PolyUTags=" & DEFAULT_POLYU_TAGS & vbCrLf
+    s = s & "VIPSubjectKeywords=" & DEFAULT_VIP_SUBJECT_KEYWORDS & vbCrLf
+    s = s & "DeleteSenderPatterns=" & DEFAULT_DELETE_SENDER_PATTERNS & vbCrLf
+    s = s & "DeleteKnownSenders=" & DEFAULT_DELETE_KNOWN_SENDERS & vbCrLf
+    s = s & "DeleteSubjectPatterns=" & DEFAULT_DELETE_SUBJECT_PATTERNS & vbCrLf
+    s = s & vbCrLf
+    s = s & "[LLM]" & vbCrLf
+    s = s & "UseLLMAPI=" & IIf(DEFAULT_USE_LLM_API, "True", "False") & vbCrLf
+    s = s & "; Provider: local | azure | claude | openai" & vbCrLf
+    s = s & "Provider=" & DEFAULT_LLM_PROVIDER & vbCrLf
+    s = s & "AzureEndpoint=" & DEFAULT_AZURE_OPENAI_ENDPOINT & vbCrLf
+    s = s & "LocalEndpoint=" & DEFAULT_LOCAL_ENDPOINT & vbCrLf
+    s = s & "LocalModel=" & DEFAULT_LOCAL_MODEL & vbCrLf
+    s = s & "ClaudeEndpoint=" & DEFAULT_CLAUDE_ENDPOINT & vbCrLf
+    s = s & "ClaudeModel=" & DEFAULT_CLAUDE_MODEL & vbCrLf
+    s = s & "OpenAIEndpoint=" & DEFAULT_OPENAI_COMPAT_ENDPOINT & vbCrLf
+    s = s & "OpenAIModel=" & DEFAULT_OPENAI_COMPAT_MODEL & vbCrLf
+    s = s & "APIKeyMethod=" & DEFAULT_API_KEY_METHOD & vbCrLf
+    s = s & "APIKeyEnvVar=" & DEFAULT_API_KEY_ENV_VAR & vbCrLf
+    s = s & "APIKeyHardcoded=" & DEFAULT_API_KEY_HARDCODED & vbCrLf
+    s = s & "ClassifyBodyChars=" & DEFAULT_CLASSIFY_BODY_CHARS & vbCrLf
+    s = s & "ClassifyMaxTokens=" & DEFAULT_CLASSIFY_MAX_TOKENS & vbCrLf
+    s = s & "SummarizeMaxTokens=" & DEFAULT_SUMMARIZE_MAX_TOKENS & vbCrLf
+    s = s & "ReplyMaxTokens=" & DEFAULT_REPLY_MAX_TOKENS & vbCrLf
+    s = s & "Temperature=" & FormatNumberForINI(DEFAULT_LLM_TEMPERATURE) & vbCrLf
+    s = s & "ReplyTemperature=" & FormatNumberForINI(DEFAULT_REPLY_TEMPERATURE) & vbCrLf
+    s = s & "RequestTimeoutSeconds=" & DEFAULT_LLM_TIMEOUT_SECONDS & vbCrLf
+    s = s & "; Min LLM confidence (0-1) required to act on a DELETE decision; below -> Review" & vbCrLf
+    s = s & "ConfidenceThreshold=" & FormatNumberForINI(DEFAULT_CONFIDENCE_THRESHOLD) & vbCrLf
+    s = s & "SystemPrompt=" & DEFAULT_LLM_SYSTEM_PROMPT & vbCrLf
+    s = s & vbCrLf
+    s = s & "[Agent]" & vbCrLf
+    s = s & "EnableAutoReply=" & IIf(DEFAULT_ENABLE_AUTO_REPLY, "True", "False") & vbCrLf
+    s = s & "AutoReplyOnArrival=" & IIf(DEFAULT_AUTO_REPLY_ON_ARRIVAL, "True", "False") & vbCrLf
+    s = s & "LearnReplyFolder=" & DEFAULT_FOLDER_LEARN_REPLY & vbCrLf
+    s = s & "MaxReplyExamples=" & DEFAULT_MAX_REPLY_EXAMPLES & vbCrLf
+    s = s & "ReplyPersona=" & DEFAULT_REPLY_PERSONA & vbCrLf
+    s = s & "ScanSentItems=" & IIf(DEFAULT_SCAN_SENT_ITEMS, "True", "False") & vbCrLf
+    s = s & "ScanSentDays=" & DEFAULT_SCAN_SENT_DAYS & vbCrLf
+    s = s & "AutoReplyForSenders=" & DEFAULT_AUTO_REPLY_FOR_SENDERS & vbCrLf
+    s = s & "; Create draft Outlook Tasks from deadlines found by the daily digest" & vbCrLf
+    s = s & "EnableTaskExtraction=" & IIf(DEFAULT_ENABLE_TASK_EXTRACTION, "True", "False") & vbCrLf
+    s = s & "; Inject sender history (from decision_log.txt) into LLM classification prompts" & vbCrLf
+    s = s & "EnableContextEnrichment=" & IIf(DEFAULT_ENABLE_CONTEXT_ENRICHMENT, "True", "False") & vbCrLf
+    s = s & vbCrLf
+    s = s & "[Digest]" & vbCrLf
+    s = s & "EnableDailyDigest=" & IIf(DEFAULT_ENABLE_DAILY_DIGEST, "True", "False") & vbCrLf
+    s = s & "; Hour of day (0-23) after which the digest is generated once per day" & vbCrLf
+    s = s & "DigestHour=" & DEFAULT_DIGEST_HOUR & vbCrLf
+    s = s & "DigestMaxEmails=" & DEFAULT_DIGEST_MAX_EMAILS & vbCrLf
+    s = s & "DigestSendEmail=" & IIf(DEFAULT_DIGEST_SEND_EMAIL, "True", "False") & vbCrLf
+    s = s & "; Weekly LLM rule-proposal mining (proposals need approval in the Web UI)" & vbCrLf
+    s = s & "EnableRuleMining=" & IIf(DEFAULT_ENABLE_RULE_MINING, "True", "False") & vbCrLf
+    s = s & "LastDigestDate=" & vbCrLf
+    s = s & "LastRuleMiningDate=" & vbCrLf
+    s = s & vbCrLf
+    s = s & "[Sync]" & vbCrLf
+    s = s & "EnableCloudSync=" & IIf(DEFAULT_ENABLE_CLOUD_SYNC, "True", "False") & vbCrLf
+    s = s & "; Path to shared cloud folder (OneDrive, Google Drive, etc.)" & vbCrLf
+    s = s & "CloudSyncPath=" & DEFAULT_CLOUD_SYNC_PATH & vbCrLf
 
-    ts.WriteLine "[General]"
-    ts.WriteLine "Version=" & FILTER_VERSION
-    ts.WriteLine "EnableLogging=" & IIf(DEFAULT_ENABLE_LOGGING, "True", "False")
-    ts.WriteLine "LogLevel=" & DEFAULT_LOG_LEVEL
-    ts.WriteLine "EnableSelfImproving=" & IIf(DEFAULT_ENABLE_SELF_IMPROVING, "True", "False")
-    ts.WriteLine "DebugMode=" & IIf(DEFAULT_DEBUG_MODE, "True", "False")
-    ts.WriteLine "ProgressInterval=" & DEFAULT_PROGRESS_INTERVAL
-    ts.WriteLine "DryRunLimit=" & DEFAULT_DRY_RUN_LIMIT
-    ts.WriteLine "LLMBatchSize=" & DEFAULT_LLM_BATCH_SIZE
-    ts.WriteLine ""
-    ts.WriteLine "[Folders]"
-    ts.WriteLine "Protected=" & DEFAULT_FOLDER_PROTECTED
-    ts.WriteLine "Review=" & DEFAULT_FOLDER_REVIEW
-    ts.WriteLine "LearnKeep=" & DEFAULT_FOLDER_LEARN_KEEP
-    ts.WriteLine "LearnDelete=" & DEFAULT_FOLDER_LEARN_DELETE
-    ts.WriteLine "LearnSubject=" & DEFAULT_FOLDER_LEARN_SUBJECT_DELETE
-    ts.WriteLine ""
-    ts.WriteLine "[Patterns]"
-    ts.WriteLine "ProtectedDomains=" & DEFAULT_PROTECTED_DOMAINS
-    ts.WriteLine "NamePatterns=" & DEFAULT_NAME_PATTERNS
-    ts.WriteLine "GreetingPatterns=" & DEFAULT_GREETING_PATTERNS
-    ts.WriteLine "PolyUTags=" & DEFAULT_POLYU_TAGS
-    ts.WriteLine "VIPSubjectKeywords=" & DEFAULT_VIP_SUBJECT_KEYWORDS
-    ts.WriteLine "DeleteSenderPatterns=" & DEFAULT_DELETE_SENDER_PATTERNS
-    ts.WriteLine "DeleteKnownSenders=" & DEFAULT_DELETE_KNOWN_SENDERS
-    ts.WriteLine "DeleteSubjectPatterns=" & DEFAULT_DELETE_SUBJECT_PATTERNS
-    ts.WriteLine ""
-    ts.WriteLine "[LLM]"
-    ts.WriteLine "UseLLMAPI=" & IIf(DEFAULT_USE_LLM_API, "True", "False")
-    ts.WriteLine "; Provider: local | azure | claude | openai"
-    ts.WriteLine "Provider=" & DEFAULT_LLM_PROVIDER
-    ts.WriteLine "AzureEndpoint=" & DEFAULT_AZURE_OPENAI_ENDPOINT
-    ts.WriteLine "LocalEndpoint=" & DEFAULT_LOCAL_ENDPOINT
-    ts.WriteLine "LocalModel=" & DEFAULT_LOCAL_MODEL
-    ts.WriteLine "ClaudeEndpoint=" & DEFAULT_CLAUDE_ENDPOINT
-    ts.WriteLine "ClaudeModel=" & DEFAULT_CLAUDE_MODEL
-    ts.WriteLine "OpenAIEndpoint=" & DEFAULT_OPENAI_COMPAT_ENDPOINT
-    ts.WriteLine "OpenAIModel=" & DEFAULT_OPENAI_COMPAT_MODEL
-    ts.WriteLine "APIKeyMethod=" & DEFAULT_API_KEY_METHOD
-    ts.WriteLine "APIKeyEnvVar=" & DEFAULT_API_KEY_ENV_VAR
-    ts.WriteLine "APIKeyHardcoded=" & DEFAULT_API_KEY_HARDCODED
-    ts.WriteLine "ClassifyBodyChars=" & DEFAULT_CLASSIFY_BODY_CHARS
-    ts.WriteLine "ClassifyMaxTokens=" & DEFAULT_CLASSIFY_MAX_TOKENS
-    ts.WriteLine "SummarizeMaxTokens=" & DEFAULT_SUMMARIZE_MAX_TOKENS
-    ts.WriteLine "ReplyMaxTokens=" & DEFAULT_REPLY_MAX_TOKENS
-    ts.WriteLine "Temperature=" & DEFAULT_LLM_TEMPERATURE
-    ts.WriteLine "ReplyTemperature=" & DEFAULT_REPLY_TEMPERATURE
-    ts.WriteLine "SystemPrompt=" & DEFAULT_LLM_SYSTEM_PROMPT
-    ts.WriteLine ""
-    ts.WriteLine "[Agent]"
-    ts.WriteLine "EnableAutoReply=" & IIf(DEFAULT_ENABLE_AUTO_REPLY, "True", "False")
-    ts.WriteLine "AutoReplyOnArrival=" & IIf(DEFAULT_AUTO_REPLY_ON_ARRIVAL, "True", "False")
-    ts.WriteLine "LearnReplyFolder=" & DEFAULT_FOLDER_LEARN_REPLY
-    ts.WriteLine "MaxReplyExamples=" & DEFAULT_MAX_REPLY_EXAMPLES
-    ts.WriteLine "ReplyPersona=" & DEFAULT_REPLY_PERSONA
-    ts.WriteLine "ScanSentItems=" & IIf(DEFAULT_SCAN_SENT_ITEMS, "True", "False")
-    ts.WriteLine "ScanSentDays=" & DEFAULT_SCAN_SENT_DAYS
-    ts.WriteLine "AutoReplyForSenders=" & DEFAULT_AUTO_REPLY_FOR_SENDERS
-    ts.WriteLine ""
-    ts.WriteLine "[Sync]"
-    ts.WriteLine "EnableCloudSync=" & IIf(DEFAULT_ENABLE_CLOUD_SYNC, "True", "False")
-    ts.WriteLine "; Path to shared cloud folder (OneDrive, Google Drive, etc.)"
-    ts.WriteLine "CloudSyncPath=" & DEFAULT_CLOUD_SYNC_PATH
-
-    ts.Close
-    Set ts = Nothing
-    Set fso = Nothing
+    WriteTextFileUTF8 filePath, s
 
     LogMessage "INFO", "Created default settings file: " & filePath
-    Exit Sub
 
-FileError:
-    If Not ts Is Nothing Then
-        On Error Resume Next
-        ts.Close
-        On Error GoTo 0
-    End If
-    Set ts = Nothing
-    Set fso = Nothing
-    LogMessage "ERROR", "CreateDefaultSettingsFile failed: " & Err.Description
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "Utilities", "CreateDefaultSettingsFile", Err.Number, Err.Description
+    Resume PROC_EXIT
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -1096,28 +1410,30 @@ End Sub
 
 ' Read a single string value from the INI file.
 ' Returns defaultValue if the section/key is not found.
+' Reads the whole file via the BOM-aware smart reader (UTF-8 or legacy ANSI).
 Public Function ReadINISetting(ByVal section As String, ByVal key As String, ByVal defaultValue As String) As String
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.ReadINISetting"
+
     Dim filePath As String
-    Dim fso As Object
-    Dim ts As Object
+    Dim content As String
+    Dim lines As Variant
     Dim line As String
     Dim currentSection As String
     Dim eqPos As Long
+    Dim i As Long
+
+    ReadINISetting = defaultValue
 
     filePath = GetSettingsFilePath()
+    content = ReadTextFileSmart(filePath)
+    If Len(content) = 0 Then GoTo PROC_EXIT
 
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    If Not fso.FileExists(filePath) Then
-        Set fso = Nothing
-        ReadINISetting = defaultValue
-        Exit Function
-    End If
-
+    lines = SplitLines(content)
     currentSection = ""
 
-    Set ts = fso.OpenTextFile(filePath, 1)  ' ForReading
-    Do While Not ts.AtEndOfStream
-        line = Trim(ts.ReadLine)
+    For i = LBound(lines) To UBound(lines)
+        line = Trim(lines(i))
 
         ' Skip empty lines and comments
         If Len(line) = 0 Then GoTo NextLine
@@ -1135,22 +1451,21 @@ Public Function ReadINISetting(ByVal section As String, ByVal key As String, ByV
             If eqPos > 0 Then
                 If LCase(Trim(Left(line, eqPos - 1))) = LCase(key) Then
                     ReadINISetting = Trim(Mid(line, eqPos + 1))
-                    ts.Close
-                    Set ts = Nothing
-                    Set fso = Nothing
-                    Exit Function
+                    GoTo PROC_EXIT
                 End If
             End If
         End If
 
 NextLine:
-    Loop
+    Next i
 
-    ts.Close
-    Set ts = Nothing
-    Set fso = Nothing
-
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "Utilities", "ReadINISetting", Err.Number, Err.Description, section & "." & key
     ReadINISetting = defaultValue
+    Resume PROC_EXIT
 End Function
 
 ' Read a boolean value from the INI file
@@ -1160,23 +1475,40 @@ Public Function ReadINIBool(ByVal section As String, ByVal key As String, ByVal 
     ReadINIBool = (LCase(Trim(raw)) = "true" Or Trim(raw) = "1")
 End Function
 
-' Read an integer value from the INI file
-Public Function ReadINIInt(ByVal section As String, ByVal key As String, ByVal defaultValue As Integer) As Integer
+' Read an integer value from the INI file.
+' Returns Long (the old Integer return overflowed on values > 32,767,
+' e.g. ReplyMaxTokens=40000, killing Outlook startup mid-LoadAllSettings).
+Public Function ReadINIInt(ByVal section As String, ByVal key As String, ByVal defaultValue As Long) As Long
     Dim raw As String
     raw = ReadINISetting(section, key, CStr(defaultValue))
+    On Error GoTo Fallback
     If IsNumeric(Trim(raw)) Then
-        ReadINIInt = CInt(Trim(raw))
+        ReadINIInt = CLng(Trim(raw))
     Else
         ReadINIInt = defaultValue
     End If
+    Exit Function
+Fallback:
+    ReadINIInt = defaultValue
 End Function
 
-' Read a double value from the INI file
+' Read a double value from the INI file.
+' Values are written with "." decimal (FormatNumberForINI), so parse with the
+' locale-invariant Val() instead of CDbl — on a comma-decimal locale
+' CDbl("0.60") returns 60 and would break ConfidenceThreshold/Temperature.
 Public Function ReadINIDouble(ByVal section As String, ByVal key As String, ByVal defaultValue As Double) As Double
     Dim raw As String
-    raw = ReadINISetting(section, key, CStr(defaultValue))
-    If IsNumeric(Trim(raw)) Then
-        ReadINIDouble = CDbl(Trim(raw))
+    raw = Trim(ReadINISetting(section, key, ""))
+
+    If Len(raw) = 0 Then
+        ReadINIDouble = defaultValue
+        Exit Function
+    End If
+
+    ' Val is locale-invariant (always treats "." as the decimal separator)
+    ' but returns 0 for non-numeric text — verify the first char is number-like
+    If InStr(1, "0123456789.-+", Left(raw, 1)) > 0 Then
+        ReadINIDouble = Val(raw)
     Else
         ReadINIDouble = defaultValue
     End If
@@ -1188,7 +1520,6 @@ End Function
 Public Sub WriteINISetting(ByVal section As String, ByVal key As String, ByVal value As String)
     Dim filePath As String
     Dim fso As Object
-    Dim ts As Object
     Dim allLines As Collection
     Dim line As String
     Dim currentSection As String
@@ -1206,14 +1537,19 @@ Public Sub WriteINISetting(ByVal section As String, ByVal key As String, ByVal v
     Set fso = CreateObject("Scripting.FileSystemObject")
     Set allLines = New Collection
 
-    ' Read all existing lines
+    ' Strip CR/LF from the value — a value containing a newline would inject
+    ' arbitrary lines (even new sections) into the INI structure
+    value = Replace(Replace(value, vbCr, " "), vbLf, " ")
+
+    ' Read all existing lines (BOM-aware: UTF-8 or legacy ANSI)
     If fso.FileExists(filePath) Then
-        Set ts = fso.OpenTextFile(filePath, 1)  ' ForReading
-        Do While Not ts.AtEndOfStream
-            allLines.Add ts.ReadLine
-        Loop
-        ts.Close
-        Set ts = Nothing
+        Dim rawLines As Variant
+        rawLines = SplitLines(ReadTextFileSmart(filePath))
+        For i = LBound(rawLines) To UBound(rawLines)
+            ' Skip a single trailing empty artifact from the final CRLF
+            If i = UBound(rawLines) And Len(rawLines(i)) = 0 Then Exit For
+            allLines.Add CStr(rawLines(i))
+        Next i
     End If
 
     ' Find and update the key, or add it
@@ -1290,24 +1626,17 @@ NextWriteLine:
     End If
 
 WriteFile:
-    ' Write all lines back
+    ' Write all lines back as UTF-8 with BOM
     On Error GoTo WriteError
-    Set ts = fso.CreateTextFile(filePath, True)  ' True = overwrite
+    Dim sb As String
     For i = 1 To allLines.Count
-        ts.WriteLine allLines(i)
+        sb = sb & allLines(i) & vbCrLf
     Next i
-    ts.Close
-    Set ts = Nothing
+    WriteTextFileUTF8 filePath, sb
     Set fso = Nothing
     Exit Sub
 
 WriteError:
-    If Not ts Is Nothing Then
-        On Error Resume Next
-        ts.Close
-        On Error GoTo 0
-    End If
-    Set ts = Nothing
     Set fso = Nothing
     LogMessage "ERROR", "WriteINISetting failed: " & Err.Description
 End Sub
@@ -1337,13 +1666,16 @@ End Function
 ' Load learned senders from file into the in-memory cache
 ' Set forceReload = True to re-read the file even if already loaded
 Public Sub LoadLearnedSenders(Optional ByVal forceReload As Boolean = False)
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.LoadLearnedSenders"
+
     Dim filePath As String
-    Dim fso As Object
-    Dim ts As Object
+    Dim lines As Variant
     Dim line As String
     Dim parts() As String
+    Dim i As Long
 
-    If learnedSendersCacheLoaded And Not forceReload Then Exit Sub
+    If learnedSendersCacheLoaded And Not forceReload Then GoTo PROC_EXIT
 
     ' Initialize or clear the cache
     Set learnedSendersCache = CreateObject("Scripting.Dictionary")
@@ -1351,22 +1683,21 @@ Public Sub LoadLearnedSenders(Optional ByVal forceReload As Boolean = False)
 
     filePath = GetLearnedSendersFilePath()
 
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    If Not fso.FileExists(filePath) Then
+    Dim content As String
+    content = ReadTextFileSmart(filePath)
+    If Len(content) = 0 Then
         ' No file yet - cache is empty but loaded
         learnedSendersCacheLoaded = True
         LogMessage "INFO", "No learned senders file found (will be created on first learn)"
-        Set fso = Nothing
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
-    ' Read the file line by line
     Dim email As String
     Dim action As String
 
-    Set ts = fso.OpenTextFile(filePath, 1)  ' 1 = ForReading
-    Do While Not ts.AtEndOfStream
-        line = Trim(ts.ReadLine)
+    lines = SplitLines(content)
+    For i = LBound(lines) To UBound(lines)
+        line = Trim(lines(i))
 
         ' Skip empty lines and comments
         If Len(line) > 0 And Left(line, 1) <> "#" Then
@@ -1382,14 +1713,18 @@ Public Sub LoadLearnedSenders(Optional ByVal forceReload As Boolean = False)
                 End If
             End If
         End If
-    Loop
-    ts.Close
+    Next i
 
     learnedSendersCacheLoaded = True
     LogMessage "INFO", "Loaded " & learnedSendersCache.Count & " learned sender rules"
 
-    Set ts = Nothing
-    Set fso = Nothing
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "Utilities", "LoadLearnedSenders", Err.Number, Err.Description
+    learnedSendersCacheLoaded = True  ' Prevent retry loops on a locked/corrupt file
+    Resume PROC_EXIT
 End Sub
 
 ' Look up a sender email in the learned cache
@@ -1416,16 +1751,17 @@ End Function
 ' Record a learned sender rule: append to file and update cache
 Public Sub RecordLearnedSender(ByVal email As String, ByVal action As String)
     Dim filePath As String
-    Dim fso As Object
-    Dim ts As Object
     Dim lowerEmail As String
     Dim timestamp As String
 
     lowerEmail = LCase(Trim(email))
 
-    ' Warn if email has no @ (likely unresolved Exchange address)
+    ' Skip @-less addresses (unresolved Exchange /O=... DN). A rule keyed to a
+    ' DN only matches when SMTP resolution fails again — an intermittent,
+    ' confusing rule. The import macros already skip these; now writes do too.
     If InStr(1, lowerEmail, "@") = 0 Then
-        LogMessage "WARN", "RecordLearnedSender: email has no @ sign (unresolved Exchange?): " & lowerEmail
+        LogMessage "WARN", "RecordLearnedSender: skipped non-SMTP address (unresolved Exchange?): " & lowerEmail
+        Exit Sub
     End If
 
     ' Validate action
@@ -1440,33 +1776,13 @@ Public Sub RecordLearnedSender(ByVal email As String, ByVal action As String)
     ' Update in-memory cache
     learnedSendersCache(lowerEmail) = action
 
-    ' Append to file (with error handling to prevent leaked file handles)
+    ' Append to file (UTF-8; migrates legacy ANSI file on first write)
     filePath = GetLearnedSendersFilePath()
     timestamp = Format(Now, "yyyy-mm-dd hh:nn:ss")
 
-    On Error GoTo FileError
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    Set ts = fso.OpenTextFile(filePath, 8, True)  ' 8 = ForAppending, True = Create if missing
-    ts.WriteLine lowerEmail & "|" & action & "|" & timestamp
-    ts.Close
-    Set ts = Nothing
-    Set fso = Nothing
-    On Error GoTo 0
+    AppendLineUTF8 filePath, lowerEmail & "|" & action & "|" & timestamp
 
     LogMessage "INFO", "LEARNED " & action & " recorded for: " & lowerEmail
-
-    Exit Sub
-
-FileError:
-    ' Ensure file handle is closed even on error
-    If Not ts Is Nothing Then
-        On Error Resume Next
-        ts.Close
-        On Error GoTo 0
-    End If
-    Set ts = Nothing
-    Set fso = Nothing
-    LogMessage "ERROR", "RecordLearnedSender file write failed: " & Err.Description
 End Sub
 
 ' Restore a specific sender's emails from Deleted Items back to Inbox.
@@ -1566,7 +1882,15 @@ Public Function GetLearnedSendersCount() As Long
     End If
 End Function
 
-' Force reload learned senders from file and show count
+' Force reload learned senders from file — headless core (no dialogs)
+Public Function ReloadLearnedSendersCore() As String
+    LoadLearnedSenders True  ' forceReload = True
+    LoadLearnedSubjects True
+    ReloadLearnedSendersCore = "Learned rules reloaded. Senders: " & GetLearnedSendersCount() & _
+                               ", Subjects: " & GetLearnedSubjectsCount()
+End Function
+
+' Force reload learned senders from file and show count (interactive wrapper)
 Public Sub ReloadLearnedSenders()
     LoadLearnedSenders True  ' forceReload = True
 
@@ -1580,28 +1904,50 @@ End Sub
 ' Keeps only the last (most recent) entry per sender email.
 ' The in-memory cache is reloaded after rewriting.
 Public Sub DeduplicateLearnedSenders()
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.DeduplicateLearnedSenders"
+
     Dim filePath As String
-    Dim fso As Object
-    Dim ts As Object
+    filePath = GetLearnedSendersFilePath()
+
+    DeduplicatePipeFile filePath, True, "DeduplicateLearnedSenders"
+
+    ' Reload cache from the clean file
+    LoadLearnedSenders True
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "Utilities", "DeduplicateLearnedSenders", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Shared dedup engine for pipe-delimited rule files (key = first field).
+' Keeps the LAST entry per key, preserves first-appearance order, rewrites
+' the file as UTF-8. lowerKey controls case-normalisation of the key.
+Private Sub DeduplicatePipeFile(ByVal filePath As String, ByVal lowerKey As Boolean, ByVal label As String)
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.DeduplicatePipeFile"
+
+    Dim lines As Variant
     Dim line As String
     Dim parts() As String
-    Dim dedupDict As Object    ' email -> full line (last wins)
-    Dim orderList As Object    ' email -> insertion order (to preserve sequence)
-    Dim lowerEmail As String
+    Dim dedupDict As Object    ' key -> full line (last wins)
+    Dim orderList As Object    ' key -> insertion order
+    Dim ruleKey As String
     Dim linesBefore As Long
     Dim linesAfter As Long
     Dim orderIndex As Long
+    Dim i As Long
 
-    filePath = GetLearnedSendersFilePath()
-
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    If Not fso.FileExists(filePath) Then
-        LogMessage "INFO", "DeduplicateLearnedSenders: no file to deduplicate"
-        Set fso = Nothing
-        Exit Sub
+    Dim content As String
+    content = ReadTextFileSmart(filePath)
+    If Len(content) = 0 Then
+        LogMessage "INFO", label & ": no file to deduplicate"
+        GoTo PROC_EXIT
     End If
 
-    ' Pass 1: read all lines, keep last entry per sender
     Set dedupDict = CreateObject("Scripting.Dictionary")
     dedupDict.CompareMode = 1  ' case-insensitive
     Set orderList = CreateObject("Scripting.Dictionary")
@@ -1609,67 +1955,54 @@ Public Sub DeduplicateLearnedSenders()
     orderIndex = 0
     linesBefore = 0
 
-    Set ts = fso.OpenTextFile(filePath, 1)  ' ForReading
-    Do While Not ts.AtEndOfStream
-        line = Trim(ts.ReadLine)
+    lines = SplitLines(content)
+    For i = LBound(lines) To UBound(lines)
+        line = Trim(lines(i))
         If Len(line) > 0 And Left(line, 1) <> "#" Then
             linesBefore = linesBefore + 1
             parts = Split(line, "|")
             If UBound(parts) >= 1 Then
-                lowerEmail = LCase(Trim(parts(0)))
-                dedupDict(lowerEmail) = line   ' last entry wins
-                ' Track order: first appearance sets position
-                If Not orderList.Exists(lowerEmail) Then
-                    orderList(lowerEmail) = orderIndex
+                ruleKey = Trim(parts(0))
+                If lowerKey Then ruleKey = LCase(ruleKey)
+                dedupDict(ruleKey) = line   ' last entry wins
+                If Not orderList.Exists(ruleKey) Then
+                    orderList(ruleKey) = orderIndex
                     orderIndex = orderIndex + 1
                 End If
             End If
         End If
-    Loop
-    ts.Close
-    Set ts = Nothing
+    Next i
 
     linesAfter = dedupDict.Count
 
     If linesAfter = linesBefore Then
-        LogMessage "INFO", "DeduplicateLearnedSenders: no duplicates found (" & linesBefore & " lines)"
-        Set fso = Nothing
-        Set dedupDict = Nothing
-        Set orderList = Nothing
-        Exit Sub
+        LogMessage "INFO", label & ": no duplicates found (" & linesBefore & " lines)"
+        GoTo PROC_EXIT
     End If
 
-    ' Pass 2: sort by insertion order and rewrite the file
-    ' Build an array sorted by order index
+    ' Sort by insertion order and rewrite the file as UTF-8
     Dim keys As Variant
     Dim sortedLines() As String
     Dim idx As Long
+    Dim k As Variant
     keys = dedupDict.keys
 
     ReDim sortedLines(0 To linesAfter - 1)
-    Dim k As Variant
     For Each k In keys
         idx = orderList(k)
         sortedLines(idx) = dedupDict(k)
     Next k
 
-    ' Rewrite the file (ForWriting = 2, overwrite)
-    Set ts = fso.OpenTextFile(filePath, 2, True)  ' 2 = ForWriting
-    Dim j As Long
-    For j = 0 To linesAfter - 1
-        ts.WriteLine sortedLines(j)
-    Next j
-    ts.Close
+    WriteTextFileUTF8 filePath, Join(sortedLines, vbCrLf) & vbCrLf
 
-    Set ts = Nothing
-    Set fso = Nothing
-    Set dedupDict = Nothing
-    Set orderList = Nothing
+    LogMessage "INFO", label & ": " & linesBefore & " -> " & linesAfter & " lines (" & (linesBefore - linesAfter) & " duplicates removed)"
 
-    ' Reload cache from the clean file
-    LoadLearnedSenders True
-
-    LogMessage "INFO", "DeduplicateLearnedSenders: " & linesBefore & " -> " & linesAfter & " lines (" & (linesBefore - linesAfter) & " duplicates removed)"
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "Utilities", "DeduplicatePipeFile", Err.Number, Err.Description, filePath
+    Resume PROC_EXIT
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -1697,13 +2030,16 @@ End Function
 ' Load learned subjects from file into the in-memory cache
 ' Set forceReload = True to re-read the file even if already loaded
 Public Sub LoadLearnedSubjects(Optional ByVal forceReload As Boolean = False)
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.LoadLearnedSubjects"
+
     Dim filePath As String
-    Dim fso As Object
-    Dim ts As Object
+    Dim lines As Variant
     Dim line As String
     Dim parts() As String
+    Dim i As Long
 
-    If learnedSubjectsCacheLoaded And Not forceReload Then Exit Sub
+    If learnedSubjectsCacheLoaded And Not forceReload Then GoTo PROC_EXIT
 
     ' Initialize or clear the cache
     Set learnedSubjectsCache = CreateObject("Scripting.Dictionary")
@@ -1711,22 +2047,21 @@ Public Sub LoadLearnedSubjects(Optional ByVal forceReload As Boolean = False)
 
     filePath = GetLearnedSubjectsFilePath()
 
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    If Not fso.FileExists(filePath) Then
+    Dim content As String
+    content = ReadTextFileSmart(filePath)
+    If Len(content) = 0 Then
         ' No file yet - cache is empty but loaded
         learnedSubjectsCacheLoaded = True
         LogMessage "INFO", "No learned subjects file found (will be created on first learn)"
-        Set fso = Nothing
-        Exit Sub
+        GoTo PROC_EXIT
     End If
 
-    ' Read the file line by line
     Dim subj As String
     Dim subjAction As String
 
-    Set ts = fso.OpenTextFile(filePath, 1)  ' 1 = ForReading
-    Do While Not ts.AtEndOfStream
-        line = Trim(ts.ReadLine)
+    lines = SplitLines(content)
+    For i = LBound(lines) To UBound(lines)
+        line = Trim(lines(i))
 
         ' Skip empty lines and comments
         If Len(line) > 0 And Left(line, 1) <> "#" Then
@@ -1742,14 +2077,18 @@ Public Sub LoadLearnedSubjects(Optional ByVal forceReload As Boolean = False)
                 End If
             End If
         End If
-    Loop
-    ts.Close
+    Next i
 
     learnedSubjectsCacheLoaded = True
     LogMessage "INFO", "Loaded " & learnedSubjectsCache.Count & " learned subject rules"
 
-    Set ts = Nothing
-    Set fso = Nothing
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "Utilities", "LoadLearnedSubjects", Err.Number, Err.Description
+    learnedSubjectsCacheLoaded = True  ' Prevent retry loops on a locked/corrupt file
+    Resume PROC_EXIT
 End Sub
 
 ' Look up a subject against all learned subject patterns
@@ -1882,8 +2221,12 @@ Public Function ExtractSubjectPattern(ByVal subject As String) As String
 
     result = Trim(result)
 
-    ' If pattern extraction stripped too much (less than 8 chars), fall back to original
-    If Len(result) < 8 Then
+    ' Guard against over-generalisation: because LookupLearnedSubject matches
+    ' by SUBSTRING, a short or single-word pattern (e.g. "Admission" left over
+    ' after stripping "PolyU2026") would silently DELETE every future email
+    ' containing that word. Require >= 12 chars AND at least two words;
+    ' otherwise fall back to the verbatim subject.
+    If Len(result) < 12 Or InStr(1, Trim(result), " ") = 0 Then
         result = subject
     End If
 
@@ -1895,8 +2238,6 @@ End Function
 ' so that one rule matches all future emails with the same template.
 Public Sub RecordLearnedSubject(ByVal subject As String, ByVal action As String)
     Dim filePath As String
-    Dim fso As Object
-    Dim ts As Object
     Dim trimmedSubject As String
     Dim patternSubject As String
     Dim timestamp As String
@@ -1929,18 +2270,11 @@ Public Sub RecordLearnedSubject(ByVal subject As String, ByVal action As String)
     ' Update in-memory cache with the pattern (not the verbatim subject)
     learnedSubjectsCache(patternSubject) = action
 
-    ' Append to file (with error handling to prevent leaked file handles)
+    ' Append to file (UTF-8; migrates legacy ANSI file on first write)
     filePath = GetLearnedSubjectsFilePath()
     timestamp = Format(Now, "yyyy-mm-dd hh:nn:ss")
 
-    On Error GoTo FileError
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    Set ts = fso.OpenTextFile(filePath, 8, True)  ' 8 = ForAppending, True = Create if missing
-    ts.WriteLine patternSubject & "|" & action & "|" & timestamp
-    ts.Close
-    Set ts = Nothing
-    Set fso = Nothing
-    On Error GoTo 0
+    AppendLineUTF8 filePath, patternSubject & "|" & action & "|" & timestamp
 
     If patternSubject <> trimmedSubject Then
         LogMessage "INFO", "LEARNED SUBJECT " & action & " pattern: " & Left(patternSubject, 50) & _
@@ -1948,19 +2282,6 @@ Public Sub RecordLearnedSubject(ByVal subject As String, ByVal action As String)
     Else
         LogMessage "INFO", "LEARNED SUBJECT " & action & " recorded for: " & Left(trimmedSubject, 50)
     End If
-
-    Exit Sub
-
-FileError:
-    ' Ensure file handle is closed even on error
-    If Not ts Is Nothing Then
-        On Error Resume Next
-        ts.Close
-        On Error GoTo 0
-    End If
-    Set ts = Nothing
-    Set fso = Nothing
-    LogMessage "ERROR", "RecordLearnedSubject file write failed: " & Err.Description
 End Sub
 
 ' Return the number of learned subject rules in cache
@@ -1978,95 +2299,23 @@ End Function
 ' Keeps only the last (most recent) entry per subject.
 ' The in-memory cache is reloaded after rewriting.
 Public Sub DeduplicateLearnedSubjects()
-    Dim filePath As String
-    Dim fso As Object
-    Dim ts As Object
-    Dim line As String
-    Dim parts() As String
-    Dim dedupDict As Object    ' subject -> full line (last wins)
-    Dim orderList As Object    ' subject -> insertion order (to preserve sequence)
-    Dim subjKey As String
-    Dim linesBefore As Long
-    Dim linesAfter As Long
-    Dim orderIndex As Long
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.DeduplicateLearnedSubjects"
 
+    Dim filePath As String
     filePath = GetLearnedSubjectsFilePath()
 
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    If Not fso.FileExists(filePath) Then
-        LogMessage "INFO", "DeduplicateLearnedSubjects: no file to deduplicate"
-        Set fso = Nothing
-        Exit Sub
-    End If
-
-    ' Pass 1: read all lines, keep last entry per subject
-    Set dedupDict = CreateObject("Scripting.Dictionary")
-    dedupDict.CompareMode = 1  ' case-insensitive
-    Set orderList = CreateObject("Scripting.Dictionary")
-    orderList.CompareMode = 1
-    orderIndex = 0
-    linesBefore = 0
-
-    Set ts = fso.OpenTextFile(filePath, 1)  ' ForReading
-    Do While Not ts.AtEndOfStream
-        line = Trim(ts.ReadLine)
-        If Len(line) > 0 And Left(line, 1) <> "#" Then
-            linesBefore = linesBefore + 1
-            parts = Split(line, "|")
-            If UBound(parts) >= 1 Then
-                subjKey = Trim(parts(0))
-                dedupDict(subjKey) = line   ' last entry wins
-                ' Track order: first appearance sets position
-                If Not orderList.Exists(subjKey) Then
-                    orderList(subjKey) = orderIndex
-                    orderIndex = orderIndex + 1
-                End If
-            End If
-        End If
-    Loop
-    ts.Close
-    Set ts = Nothing
-
-    linesAfter = dedupDict.Count
-
-    If linesAfter = linesBefore Then
-        LogMessage "INFO", "DeduplicateLearnedSubjects: no duplicates found (" & linesBefore & " lines)"
-        Set fso = Nothing
-        Set dedupDict = Nothing
-        Set orderList = Nothing
-        Exit Sub
-    End If
-
-    ' Pass 2: sort by insertion order and rewrite the file
-    Dim keys As Variant
-    Dim sortedLines() As String
-    Dim idx As Long
-    keys = dedupDict.keys
-
-    ReDim sortedLines(0 To linesAfter - 1)
-    Dim k As Variant
-    For Each k In keys
-        idx = orderList(k)
-        sortedLines(idx) = dedupDict(k)
-    Next k
-
-    ' Rewrite the file (ForWriting = 2, overwrite)
-    Set ts = fso.OpenTextFile(filePath, 2, True)  ' 2 = ForWriting
-    Dim j As Long
-    For j = 0 To linesAfter - 1
-        ts.WriteLine sortedLines(j)
-    Next j
-    ts.Close
-
-    Set ts = Nothing
-    Set fso = Nothing
-    Set dedupDict = Nothing
-    Set orderList = Nothing
+    DeduplicatePipeFile filePath, False, "DeduplicateLearnedSubjects"
 
     ' Reload cache from the clean file
     LoadLearnedSubjects True
 
-    LogMessage "INFO", "DeduplicateLearnedSubjects: " & linesBefore & " -> " & linesAfter & " lines (" & (linesBefore - linesAfter) & " duplicates removed)"
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "Utilities", "DeduplicateLearnedSubjects", Err.Number, Err.Description
+    Resume PROC_EXIT
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -2101,31 +2350,29 @@ PROC_ERR:
     Resume PROC_EXIT
 End Function
 
-' Count non-empty, non-comment lines in a file.
+' Count non-empty, non-comment lines in a file (BOM-aware).
 Private Function CountFileLines(ByVal filePath As String) As Long
     On Error GoTo PROC_ERR
     PushCallStack "Utilities.CountFileLines"
 
-    Dim fso As Object
-    Dim ts As Object
+    Dim lines As Variant
     Dim line As String
     Dim cnt As Long
+    Dim i As Long
 
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    If Not fso.FileExists(filePath) Then
+    Dim content As String
+    content = ReadTextFileSmart(filePath)
+    If Len(content) = 0 Then
         CountFileLines = 0
         GoTo PROC_EXIT
     End If
 
     cnt = 0
-    Set ts = fso.OpenTextFile(filePath, 1) ' ForReading
-    Do While Not ts.AtEndOfStream
-        line = Trim(ts.ReadLine)
+    lines = SplitLines(content)
+    For i = LBound(lines) To UBound(lines)
+        line = Trim(lines(i))
         If Len(line) > 0 And Left(line, 1) <> "#" Then cnt = cnt + 1
-    Loop
-    ts.Close
-    Set ts = Nothing
-    Set fso = Nothing
+    Next i
 
     CountFileLines = cnt
 
@@ -2134,14 +2381,56 @@ PROC_EXIT:
     Exit Function
 PROC_ERR:
     LogError "Utilities", "CountFileLines", Err.Number, Err.Description
-    If Not ts Is Nothing Then
-        On Error Resume Next
-        ts.Close
-        On Error GoTo 0
-    End If
-    Set ts = Nothing
-    Set fso = Nothing
     CountFileLines = 0
+    Resume PROC_EXIT
+End Function
+
+' Load a pipe-delimited rule file into a Dictionary (last entry per key wins).
+' Key: first field (lowercased for sender files) or subject|from for replies.
+Private Function LoadRuleFileDict(ByVal filePath As String, ByVal isSendersFile As Boolean, _
+                                  ByVal isRepliesFile As Boolean) As Object
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.LoadRuleFileDict"
+
+    Dim dict As Object
+    Set dict = CreateObject("Scripting.Dictionary")
+    dict.CompareMode = 1  ' case-insensitive
+    Set LoadRuleFileDict = dict
+
+    Dim lines As Variant
+    Dim line As String
+    Dim parts() As String
+    Dim ruleKey As String
+    Dim i As Long
+
+    Dim content As String
+    content = ReadTextFileSmart(filePath)
+    If Len(content) = 0 Then GoTo PROC_EXIT
+
+    lines = SplitLines(content)
+    For i = LBound(lines) To UBound(lines)
+        line = Trim(lines(i))
+        If Len(line) > 0 And Left(line, 1) <> "#" Then
+            parts = Split(line, "|")
+            If UBound(parts) >= 1 Then
+                If isSendersFile Then
+                    ruleKey = LCase(Trim(parts(0)))
+                ElseIf isRepliesFile Then
+                    ' Composite key: subject|from (first two fields)
+                    ruleKey = Trim(parts(0)) & "|" & Trim(parts(1))
+                Else
+                    ruleKey = Trim(parts(0))
+                End If
+                dict(ruleKey) = line
+            End If
+        End If
+    Next i
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "Utilities", "LoadRuleFileDict", Err.Number, Err.Description, filePath
     Resume PROC_EXIT
 End Function
 
@@ -2152,11 +2441,7 @@ Private Function SyncOneFile(ByVal localPath As String, ByVal cloudFolder As Str
     PushCallStack "Utilities.SyncOneFile"
 
     Dim fso As Object
-    Dim ts As Object
     Dim cloudPath As String
-    Dim line As String
-    Dim parts() As String
-    Dim ruleKey As String
     Dim dictLocal As Object
     Dim dictCloud As Object
     Dim dictMerged As Object
@@ -2172,7 +2457,6 @@ Private Function SyncOneFile(ByVal localPath As String, ByVal cloudFolder As Str
     Dim keys As Variant
     Dim sortedLines() As String
     Dim idx As Long
-    Dim j As Long
     Dim isSendersFile As Boolean
     Dim isRepliesFile As Boolean
     Dim tsLocal As String
@@ -2221,62 +2505,11 @@ Private Function SyncOneFile(ByVal localPath As String, ByVal cloudFolder As Str
     End If
 
     ' Case 4: both exist - merge with timestamp-based conflict resolution
-    ' Read local file into dictLocal (last entry per key wins)
-    Set dictLocal = CreateObject("Scripting.Dictionary")
-    dictLocal.CompareMode = 1  ' case-insensitive
-    Set ts = fso.OpenTextFile(localPath, 1) ' ForReading
-    Do While Not ts.AtEndOfStream
-        line = Trim(ts.ReadLine)
-        If Len(line) > 0 And Left(line, 1) <> "#" Then
-            parts = Split(line, "|")
-            If UBound(parts) >= 1 Then
-                If isSendersFile Then
-                    ruleKey = LCase(Trim(parts(0)))
-                ElseIf isRepliesFile Then
-                    ' Composite key: subject|from (first two fields)
-                    If UBound(parts) >= 1 Then
-                        ruleKey = Trim(parts(0)) & "|" & Trim(parts(1))
-                    Else
-                        ruleKey = Trim(parts(0))
-                    End If
-                Else
-                    ruleKey = Trim(parts(0))
-                End If
-                dictLocal(ruleKey) = line
-            End If
-        End If
-    Loop
-    ts.Close
-    Set ts = Nothing
+    ' (BOM-aware reads: files may be legacy ANSI or v3.1 UTF-8)
+    Set dictLocal = LoadRuleFileDict(localPath, isSendersFile, isRepliesFile)
     localCount = dictLocal.Count
 
-    ' Read cloud file into dictCloud
-    Set dictCloud = CreateObject("Scripting.Dictionary")
-    dictCloud.CompareMode = 1
-    Set ts = fso.OpenTextFile(cloudPath, 1)
-    Do While Not ts.AtEndOfStream
-        line = Trim(ts.ReadLine)
-        If Len(line) > 0 And Left(line, 1) <> "#" Then
-            parts = Split(line, "|")
-            If UBound(parts) >= 1 Then
-                If isSendersFile Then
-                    ruleKey = LCase(Trim(parts(0)))
-                ElseIf isRepliesFile Then
-                    ' Composite key: subject|from (first two fields)
-                    If UBound(parts) >= 1 Then
-                        ruleKey = Trim(parts(0)) & "|" & Trim(parts(1))
-                    Else
-                        ruleKey = Trim(parts(0))
-                    End If
-                Else
-                    ruleKey = Trim(parts(0))
-                End If
-                dictCloud(ruleKey) = line
-            End If
-        End If
-    Loop
-    ts.Close
-    Set ts = Nothing
+    Set dictCloud = LoadRuleFileDict(cloudPath, isSendersFile, isRepliesFile)
     cloudCount = dictCloud.Count
 
     ' Build merged dictionary: start with local, merge cloud entries
@@ -2336,21 +2569,11 @@ Private Function SyncOneFile(ByVal localPath As String, ByVal cloudFolder As Str
         sortedLines(idx) = dictMerged(k)
     Next k
 
-    ' Write merged result to local file
-    Set ts = fso.OpenTextFile(localPath, 2, True) ' ForWriting
-    For j = 0 To mergedCount - 1
-        ts.WriteLine sortedLines(j)
-    Next j
-    ts.Close
-    Set ts = Nothing
-
-    ' Write merged result to cloud file
-    Set ts = fso.OpenTextFile(cloudPath, 2, True)
-    For j = 0 To mergedCount - 1
-        ts.WriteLine sortedLines(j)
-    Next j
-    ts.Close
-    Set ts = Nothing
+    ' Write merged result to local and cloud files (UTF-8 with BOM)
+    Dim mergedContent As String
+    mergedContent = Join(sortedLines, vbCrLf) & vbCrLf
+    WriteTextFileUTF8 localPath, mergedContent
+    WriteTextFileUTF8 cloudPath, mergedContent
 
     Set dictLocal = Nothing
     Set dictCloud = Nothing
@@ -2370,12 +2593,6 @@ PROC_ERR:
     errNum = Err.Number
     errDesc = Err.Description
     LogError "Utilities", "SyncOneFile", errNum, errDesc
-    If Not ts Is Nothing Then
-        On Error Resume Next
-        ts.Close
-        On Error GoTo 0
-    End If
-    Set ts = Nothing
     Set fso = Nothing
     Set dictLocal = Nothing
     Set dictCloud = Nothing
@@ -2385,38 +2602,31 @@ PROC_ERR:
     Resume PROC_EXIT
 End Function
 
-' Sync learned senders and subjects with a cloud folder.
-' Reads RuntimeEnableCloudSync and RuntimeCloudSyncPath from settings.
-' Merges rules bidirectionally using timestamp-based conflict resolution.
-Public Sub SyncLearnedRules()
+' Headless sync core shared by the interactive macro, startup/quit auto-sync,
+' and the Web UI bridge. Returns a multi-line summary; "SKIPPED: ..." when
+' sync is disabled/unavailable, "ERROR: ..." on failure.
+Public Function SyncLearnedRulesCore() As String
     On Error GoTo PROC_ERR
-    PushCallStack "Utilities.SyncLearnedRules"
+    PushCallStack "Utilities.SyncLearnedRulesCore"
 
-    ' Validate settings
+    SyncLearnedRulesCore = ""
+
     If Not RuntimeEnableCloudSync Then
-        MsgBox "Cloud sync is disabled." & vbCrLf & vbCrLf & _
-               "Enable it in settings.ini:" & vbCrLf & _
-               "[Sync]" & vbCrLf & _
-               "EnableCloudSync=True", _
-               vbInformation, "Cloud Sync"
+        SyncLearnedRulesCore = "SKIPPED: Cloud sync is disabled. Set EnableCloudSync=True under [Sync] in settings.ini."
         GoTo PROC_EXIT
     End If
 
     If Len(Trim(RuntimeCloudSyncPath)) = 0 Then
-        MsgBox "Cloud sync path is not configured." & vbCrLf & vbCrLf & _
-               "Set CloudSyncPath in settings.ini under [Sync].", _
-               vbExclamation, "Cloud Sync"
+        SyncLearnedRulesCore = "SKIPPED: CloudSyncPath is not configured under [Sync] in settings.ini."
         GoTo PROC_EXIT
     End If
 
+    ' Skip gracefully if the cloud folder is unavailable (offline, paused, unmounted)
     Dim fso As Object
     Set fso = CreateObject("Scripting.FileSystemObject")
     If Not fso.FolderExists(RuntimeCloudSyncPath) Then
-        MsgBox "Cloud sync path does not exist:" & vbCrLf & _
-               RuntimeCloudSyncPath & vbCrLf & vbCrLf & _
-               "Please verify the path in settings.ini.", _
-               vbExclamation, "Cloud Sync"
         Set fso = Nothing
+        SyncLearnedRulesCore = "SKIPPED: Cloud path not available (" & RuntimeCloudSyncPath & "). Using local rules only."
         GoTo PROC_EXIT
     End If
     Set fso = Nothing
@@ -2424,106 +2634,63 @@ Public Sub SyncLearnedRules()
     Dim cloudFolder As String
     cloudFolder = RuntimeCloudSyncPath & "\" & LEARNED_DATA_FOLDER
 
-    Dim localSendersPath As String
-    Dim localSubjectsPath As String
-    Dim localRepliesPath As String
-    localSendersPath = GetLearnedSendersFilePath()
-    localSubjectsPath = GetLearnedSubjectsFilePath()
-    localRepliesPath = GetLearnedRepliesFilePath()
-
     Dim resultSenders As String
     Dim resultSubjects As String
     Dim resultReplies As String
 
-    resultSenders = SyncOneFile(localSendersPath, cloudFolder, LEARNED_SENDERS_FILE)
-    resultSubjects = SyncOneFile(localSubjectsPath, cloudFolder, LEARNED_SUBJECTS_FILE)
-    resultReplies = SyncOneFile(localRepliesPath, cloudFolder, LEARNED_REPLIES_FILE)
+    resultSenders = SyncOneFile(GetLearnedSendersFilePath(), cloudFolder, LEARNED_SENDERS_FILE)
+    resultSubjects = SyncOneFile(GetLearnedSubjectsFilePath(), cloudFolder, LEARNED_SUBJECTS_FILE)
+    resultReplies = SyncOneFile(GetLearnedRepliesFilePath(), cloudFolder, LEARNED_REPLIES_FILE)
 
     ' Refresh in-memory caches after sync
     LoadLearnedSenders True
     LoadLearnedSubjects True
 
-    MsgBox "Cloud sync complete:" & vbCrLf & vbCrLf & _
-           resultSenders & vbCrLf & _
-           resultSubjects & vbCrLf & _
-           resultReplies & vbCrLf & vbCrLf & _
-           "Cloud folder: " & cloudFolder, _
-           vbInformation, "Cloud Sync"
+    SyncLearnedRulesCore = resultSenders & vbCrLf & resultSubjects & vbCrLf & resultReplies & vbCrLf & _
+                           "Cloud folder: " & cloudFolder
 
-    LogMessage "INFO", "SyncLearnedRules complete. Senders: " & resultSenders & " | Subjects: " & resultSubjects & " | Replies: " & resultReplies
-
-PROC_EXIT:
-    PopCallStack
-    Exit Sub
-PROC_ERR:
-    LogError "Utilities", "SyncLearnedRules", Err.Number, Err.Description
-    Resume PROC_EXIT
-End Sub
-
-' Silent auto-sync: called at Outlook startup and quit.
-' No MsgBox prompts. Gracefully skips if cloud sync is disabled or OneDrive is unavailable.
-' Returns True if sync was performed, False if skipped.
-Public Function SyncLearnedRulesAuto() As Boolean
-    On Error GoTo PROC_ERR
-    PushCallStack "Utilities.SyncLearnedRulesAuto"
-
-    SyncLearnedRulesAuto = False
-
-    ' Skip if sync is disabled
-    If Not RuntimeEnableCloudSync Then
-        LogMessage "INFO", "SyncLearnedRulesAuto: cloud sync disabled, skipping"
-        GoTo PROC_EXIT
-    End If
-
-    ' Skip if path is not configured
-    If Len(Trim(RuntimeCloudSyncPath)) = 0 Then
-        LogMessage "INFO", "SyncLearnedRulesAuto: cloud sync path not configured, skipping"
-        GoTo PROC_EXIT
-    End If
-
-    ' Skip gracefully if OneDrive folder is unavailable (offline, paused, unmounted)
-    Dim fso As Object
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    If Not fso.FolderExists(RuntimeCloudSyncPath) Then
-        LogMessage "WARN", "SyncLearnedRulesAuto: cloud path not available (" & RuntimeCloudSyncPath & "), using local rules only"
-        Set fso = Nothing
-        GoTo PROC_EXIT
-    End If
-    Set fso = Nothing
-
-    Dim cloudFolder As String
-    cloudFolder = RuntimeCloudSyncPath & "\" & LEARNED_DATA_FOLDER
-
-    Dim localSendersPath As String
-    Dim localSubjectsPath As String
-    Dim localRepliesPath As String
-    localSendersPath = GetLearnedSendersFilePath()
-    localSubjectsPath = GetLearnedSubjectsFilePath()
-    localRepliesPath = GetLearnedRepliesFilePath()
-
-    Dim resultSenders As String
-    Dim resultSubjects As String
-    Dim resultReplies As String
-
-    resultSenders = SyncOneFile(localSendersPath, cloudFolder, LEARNED_SENDERS_FILE)
-    resultSubjects = SyncOneFile(localSubjectsPath, cloudFolder, LEARNED_SUBJECTS_FILE)
-    resultReplies = SyncOneFile(localRepliesPath, cloudFolder, LEARNED_REPLIES_FILE)
-
-    ' Refresh in-memory caches after sync
-    LoadLearnedSenders True
-    LoadLearnedSubjects True
-
-    LogMessage "INFO", "SyncLearnedRulesAuto complete. " & resultSenders & " | " & resultSubjects & " | " & resultReplies
-    SyncLearnedRulesAuto = True
+    LogMessage "INFO", "SyncLearnedRules complete. " & resultSenders & " | " & resultSubjects & " | " & resultReplies
 
 PROC_EXIT:
     PopCallStack
     Exit Function
 PROC_ERR:
-    LogError "Utilities", "SyncLearnedRulesAuto", Err.Number, Err.Description
-    LogMessage "WARN", "SyncLearnedRulesAuto failed, continuing with local rules"
-    SyncLearnedRulesAuto = False
+    LogError "Utilities", "SyncLearnedRulesCore", Err.Number, Err.Description
+    SyncLearnedRulesCore = "ERROR: Cloud sync failed: " & Err.Description
     Resume PROC_EXIT
+End Function
+
+' Sync learned senders, subjects, and replies with a cloud folder (interactive).
+' Merges rules bidirectionally using timestamp-based conflict resolution.
+Public Sub SyncLearnedRules()
+    Dim summary As String
+    summary = SyncLearnedRulesCore()
+
+    If Left(summary, 8) = "SKIPPED:" Then
+        MsgBox Mid(summary, 10), vbExclamation, "Cloud Sync"
+    ElseIf Left(summary, 6) = "ERROR:" Then
+        MsgBox summary, vbCritical, "Cloud Sync"
+    Else
+        MsgBox "Cloud sync complete:" & vbCrLf & vbCrLf & summary, vbInformation, "Cloud Sync"
+    End If
+End Sub
+
+' Silent auto-sync: called at Outlook startup and quit.
+' No MsgBox prompts. Gracefully skips if cloud sync is disabled or OneDrive is unavailable.
+' Returns True if sync was performed, False if skipped/failed.
+Public Function SyncLearnedRulesAuto() As Boolean
+    Dim summary As String
+    summary = SyncLearnedRulesCore()
+
+    If Left(summary, 8) = "SKIPPED:" Then
+        LogMessage "INFO", "SyncLearnedRulesAuto: " & Mid(summary, 10)
+        SyncLearnedRulesAuto = False
+    ElseIf Left(summary, 6) = "ERROR:" Then
+        LogMessage "WARN", "SyncLearnedRulesAuto failed, continuing with local rules"
+        SyncLearnedRulesAuto = False
+    Else
+        SyncLearnedRulesAuto = True
+    End If
 End Function
 
 '-------------------------------------------------------------------------------
@@ -2577,7 +2744,6 @@ Public Function GetLearnedSubjectKeys() As Collection
 End Function
 
 ' Return a dictionary copy of all learned sender rules (email -> action).
-' Used by the dashboard to display learned rules in a ListBox.
 Public Function GetLearnedSendersCacheCopy() As Object
     Dim result As Object
     Dim k As Variant
@@ -2597,7 +2763,6 @@ Public Function GetLearnedSendersCacheCopy() As Object
 End Function
 
 ' Return a dictionary copy of all learned subject rules (subject -> action).
-' Used by the dashboard to display learned rules in a ListBox.
 Public Function GetLearnedSubjectsCacheCopy() As Object
     Dim result As Object
     Dim k As Variant
@@ -2621,17 +2786,11 @@ End Function
 '-------------------------------------------------------------------------------
 
 ' Delete a single learned sender rule from both cache and file.
-' Uses read-all -> filter -> write-all approach.
 Public Sub DeleteLearnedSenderRule(ByVal email As String)
-    Dim filePath As String
-    Dim fso As Object
-    Dim ts As Object
-    Dim line As String
-    Dim parts() As String
-    Dim allLines As Collection
-    Dim lowerEmail As String
-    Dim i As Long
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.DeleteLearnedSenderRule"
 
+    Dim lowerEmail As String
     lowerEmail = LCase(Trim(email))
 
     ' Remove from in-memory cache
@@ -2640,59 +2799,61 @@ Public Sub DeleteLearnedSenderRule(ByVal email As String)
         learnedSendersCache.Remove lowerEmail
     End If
 
-    ' Rewrite the file without this sender's entries
-    filePath = GetLearnedSendersFilePath()
+    RemovePipeFileEntries GetLearnedSendersFilePath(), lowerEmail
+    LogMessage "INFO", "Deleted learned sender rule for: " & lowerEmail
 
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    If Not fso.FileExists(filePath) Then
-        Set fso = Nothing
-        Exit Sub
-    End If
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "Utilities", "DeleteLearnedSenderRule", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
 
-    ' Read all lines, keeping only those NOT matching the target email
-    Set allLines = New Collection
+' Rewrite a pipe-delimited rule file without the entries whose first field
+' matches keyValue (case-insensitive). Comments/blank/malformed lines are kept.
+Private Sub RemovePipeFileEntries(ByVal filePath As String, ByVal keyValue As String)
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.RemovePipeFileEntries"
 
-    Set ts = fso.OpenTextFile(filePath, 1)  ' ForReading
-    Do While Not ts.AtEndOfStream
-        line = ts.ReadLine
+    Dim content As String
+    content = ReadTextFileSmart(filePath)
+    If Len(content) = 0 Then GoTo PROC_EXIT
+
+    Dim lines As Variant
+    Dim line As String
+    Dim parts() As String
+    Dim kept As String
+    Dim i As Long
+
+    lines = SplitLines(content)
+    For i = LBound(lines) To UBound(lines)
+        line = lines(i)
+        ' Skip the single trailing empty artifact of the final newline
+        If i = UBound(lines) And Len(line) = 0 Then Exit For
+
         If Len(Trim(line)) > 0 And Left(Trim(line), 1) <> "#" Then
             parts = Split(Trim(line), "|")
             If UBound(parts) >= 1 Then
-                If LCase(Trim(parts(0))) <> lowerEmail Then
-                    allLines.Add line
+                If LCase(Trim(parts(0))) <> LCase(keyValue) Then
+                    kept = kept & line & vbCrLf
                 End If
             Else
-                allLines.Add line  ' Keep malformed lines as-is
+                kept = kept & line & vbCrLf  ' Keep malformed lines as-is
             End If
         Else
-            allLines.Add line  ' Keep comments and blank lines
+            kept = kept & line & vbCrLf  ' Keep comments and blank lines
         End If
-    Loop
-    ts.Close
-    Set ts = Nothing
-
-    ' Rewrite the file
-    On Error GoTo FileError
-    Set ts = fso.CreateTextFile(filePath, True)  ' Overwrite
-    For i = 1 To allLines.Count
-        ts.WriteLine allLines(i)
     Next i
-    ts.Close
-    Set ts = Nothing
-    Set fso = Nothing
 
-    LogMessage "INFO", "Deleted learned sender rule for: " & lowerEmail
+    WriteTextFileUTF8 filePath, kept
+
+PROC_EXIT:
+    PopCallStack
     Exit Sub
-
-FileError:
-    If Not ts Is Nothing Then
-        On Error Resume Next
-        ts.Close
-        On Error GoTo 0
-    End If
-    Set ts = Nothing
-    Set fso = Nothing
-    LogMessage "ERROR", "DeleteLearnedSenderRule file write failed: " & Err.Description
+PROC_ERR:
+    LogError "Utilities", "RemovePipeFileEntries", Err.Number, Err.Description, filePath
+    Resume PROC_EXIT
 End Sub
 
 '-------------------------------------------------------------------------------
@@ -2737,8 +2898,6 @@ Public Sub RecordLearnedReply(ByVal originalSubject As String, _
                                ByVal originalBodySnippet As String, _
                                ByVal replyBodySnippet As String)
     Dim filePath As String
-    Dim fso As Object
-    Dim ts As Object
     Dim timestamp As String
 
     filePath = GetLearnedRepliesFilePath()
@@ -2754,88 +2913,66 @@ Public Sub RecordLearnedReply(ByVal originalSubject As String, _
     safeOrigBody = SanitizeSnippet(originalBodySnippet, 500)
     safeReplyBody = SanitizeSnippet(replyBodySnippet, 1000)
 
-    On Error GoTo FileError
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    Set ts = fso.OpenTextFile(filePath, 8, True)  ' 8 = ForAppending, create if missing
-    ts.WriteLine safeSubject & "|" & safeFrom & "|" & safeOrigBody & "|" & safeReplyBody & "|" & timestamp
-    ts.Close
-    Set ts = Nothing
-    Set fso = Nothing
-    On Error GoTo 0
+    AppendLineUTF8 filePath, safeSubject & "|" & safeFrom & "|" & safeOrigBody & "|" & safeReplyBody & "|" & timestamp
 
     LogMessage "INFO", "Learned reply recorded for: " & Left(safeSubject, 50)
-    Exit Sub
-
-FileError:
-    If Not ts Is Nothing Then
-        On Error Resume Next
-        ts.Close
-        On Error GoTo 0
-    End If
-    Set ts = Nothing
-    Set fso = Nothing
-    LogMessage "ERROR", "RecordLearnedReply file write failed: " & Err.Description
 End Sub
 
 ' Load the most recent N reply pairs from learned_replies.txt.
 ' Returns a Collection of pipe-delimited strings (raw lines).
-Public Function LoadRecentReplyPairs(ByVal maxPairs As Integer) As Collection
+Public Function LoadRecentReplyPairs(ByVal maxPairs As Long) As Collection
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.LoadRecentReplyPairs"
+
     Dim result As Collection
     Set result = New Collection
+    Set LoadRecentReplyPairs = result
 
     Dim filePath As String
     filePath = GetLearnedRepliesFilePath()
 
-    Dim fso As Object
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    If Not fso.FileExists(filePath) Then
-        Set fso = Nothing
-        Set LoadRecentReplyPairs = result
-        Exit Function
-    End If
+    Dim content As String
+    content = ReadTextFileSmart(filePath)
+    If Len(content) = 0 Then GoTo PROC_EXIT
 
     ' Read all lines, keep last maxPairs
     Dim allLines As Collection
     Set allLines = New Collection
 
-    Dim ts As Object
+    Dim lines As Variant
     Dim line As String
-    Set ts = fso.OpenTextFile(filePath, 1)  ' ForReading
-    Do While Not ts.AtEndOfStream
-        line = Trim(ts.ReadLine)
+    Dim i As Long
+    lines = SplitLines(content)
+    For i = LBound(lines) To UBound(lines)
+        line = Trim(lines(i))
         If Len(line) > 0 And Left(line, 1) <> "#" Then
             allLines.Add line
         End If
-    Loop
-    ts.Close
-    Set ts = Nothing
-    Set fso = Nothing
+    Next i
 
     ' Return the last maxPairs lines
     Dim startIdx As Long
     startIdx = allLines.Count - maxPairs + 1
     If startIdx < 1 Then startIdx = 1
 
-    Dim i As Long
     For i = startIdx To allLines.Count
         result.Add allLines(i)
     Next i
 
-    Set LoadRecentReplyPairs = result
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "Utilities", "LoadRecentReplyPairs", Err.Number, Err.Description
+    Resume PROC_EXIT
 End Function
 
 ' Delete a single learned subject rule from both cache and file.
-' Uses read-all -> filter -> write-all approach.
 Public Sub DeleteLearnedSubjectRule(ByVal subject As String)
-    Dim filePath As String
-    Dim fso As Object
-    Dim ts As Object
-    Dim line As String
-    Dim parts() As String
-    Dim allLines As Collection
-    Dim targetSubject As String
-    Dim i As Long
+    On Error GoTo PROC_ERR
+    PushCallStack "Utilities.DeleteLearnedSubjectRule"
 
+    Dim targetSubject As String
     targetSubject = SanitizeSubject(subject)
 
     ' Remove from in-memory cache
@@ -2844,590 +2981,14 @@ Public Sub DeleteLearnedSubjectRule(ByVal subject As String)
         learnedSubjectsCache.Remove targetSubject
     End If
 
-    ' Rewrite the file without this subject's entries
-    filePath = GetLearnedSubjectsFilePath()
-
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    If Not fso.FileExists(filePath) Then
-        Set fso = Nothing
-        Exit Sub
-    End If
-
-    ' Read all lines, keeping only those NOT matching the target subject
-    Set allLines = New Collection
-
-    Set ts = fso.OpenTextFile(filePath, 1)  ' ForReading
-    Do While Not ts.AtEndOfStream
-        line = ts.ReadLine
-        If Len(Trim(line)) > 0 And Left(Trim(line), 1) <> "#" Then
-            parts = Split(Trim(line), "|")
-            If UBound(parts) >= 1 Then
-                ' Case-insensitive comparison (matching Dictionary behavior)
-                If LCase(Trim(parts(0))) <> LCase(targetSubject) Then
-                    allLines.Add line
-                End If
-            Else
-                allLines.Add line
-            End If
-        Else
-            allLines.Add line
-        End If
-    Loop
-    ts.Close
-    Set ts = Nothing
-
-    ' Rewrite the file
-    On Error GoTo FileError2
-    Set ts = fso.CreateTextFile(filePath, True)  ' Overwrite
-    For i = 1 To allLines.Count
-        ts.WriteLine allLines(i)
-    Next i
-    ts.Close
-    Set ts = Nothing
-    Set fso = Nothing
-
+    RemovePipeFileEntries GetLearnedSubjectsFilePath(), targetSubject
     LogMessage "INFO", "Deleted learned subject rule for: " & Left(targetSubject, 50)
+
+PROC_EXIT:
+    PopCallStack
     Exit Sub
-
-FileError2:
-    If Not ts Is Nothing Then
-        On Error Resume Next
-        ts.Close
-        On Error GoTo 0
-    End If
-    Set ts = Nothing
-    Set fso = Nothing
-    LogMessage "ERROR", "DeleteLearnedSubjectRule file write failed: " & Err.Description
+PROC_ERR:
+    LogError "Utilities", "DeleteLearnedSubjectRule", Err.Number, Err.Description
+    Resume PROC_EXIT
 End Sub
 
-'===============================================================================
-' WEB UI COMMAND BRIDGE HELPERS (v3.0)
-' Support for file-based IPC with the Python Flask Web UI.
-' Commands are JSON files in %APPDATA%\OutlookEmailFilter\commands\
-'===============================================================================
-
-' Return path to the commands directory (auto-creates it)
-Public Function GetCommandsDir() As String
-    Dim dir As String
-    dir = Environ("APPDATA") & "\OutlookEmailFilter\commands"
-    Dim fso As Object
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    If Not fso.FolderExists(dir) Then
-        On Error Resume Next
-        fso.CreateFolder dir
-        On Error GoTo 0
-    End If
-    Set fso = Nothing
-    GetCommandsDir = dir
-End Function
-
-' Write a result JSON file for a completed command
-' status: "ok" or "error"; output: text to return to the Web UI
-Public Sub WriteResultFile(ByVal cmdId As String, ByVal status As String, ByVal output As String)
-    Dim stm As Object
-    Dim resultPath As String
-    Dim jsonLine As String
-
-    ' Sanitize output for JSON embedding (escape all JSON-unsafe characters)
-    Dim safe As String
-    safe = Replace(output, "\", "\\")
-    safe = Replace(safe, """", "\""")
-    safe = Replace(safe, vbCrLf, "\n")
-    safe = Replace(safe, vbCr, "\n")
-    safe = Replace(safe, vbLf, "\n")
-    safe = Replace(safe, vbTab, "\t")
-    safe = Replace(safe, Chr(8), "")    ' backspace
-    safe = Replace(safe, Chr(12), "")   ' form feed
-    safe = Replace(safe, Chr(0), "")
-
-    resultPath = GetCommandsDir() & "\" & cmdId & ".result"
-    jsonLine = "{""id"":""" & cmdId & """,""status"":""" & status & """,""output"":""" & safe & """}"
-
-    On Error Resume Next
-    Set stm = CreateObject("ADODB.Stream")
-    stm.Type = 2            ' adTypeText
-    stm.Charset = "utf-8"
-    stm.Open
-    stm.WriteText jsonLine
-    stm.SaveToFile resultPath, 2  ' adSaveCreateOverWrite
-    stm.Close
-    On Error GoTo 0
-    Set stm = Nothing
-End Sub
-
-' ---------------------------------------------------------------------------
-' WEB UI COMMAND POLLER
-' Uses Windows API SetTimer/KillTimer because Outlook VBA does NOT support
-' Application.OnTime (that is Excel/Word only).
-' ---------------------------------------------------------------------------
-
-Public Sub StartCommandPollerStd()
-    If pollerRunningFlag Then Exit Sub
-    pollerRunningFlag = True
-    pollerTimerId = SetTimer(0, 0, 2000, AddressOf PollerCallback)
-    If pollerTimerId = 0 Then
-        pollerRunningFlag = False
-        LogMessage "ERROR", "Failed to start command poller timer"
-    Else
-        LogMessage "INFO", "Web UI command poller started (timer ID: " & pollerTimerId & ")"
-    End If
-End Sub
-
-Public Sub StopCommandPollerStd()
-    If Not pollerRunningFlag Then Exit Sub
-    pollerRunningFlag = False
-    If pollerTimerId <> 0 Then
-        KillTimer 0, pollerTimerId
-        pollerTimerId = 0
-    End If
-    LogMessage "INFO", "Web UI command poller stopped"
-End Sub
-
-#If VBA7 Then
-Private Sub PollerCallback(ByVal hWnd As LongPtr, ByVal uMsg As Long, _
-                           ByVal nIDEvent As LongPtr, ByVal dwTime As Long)
-#Else
-Private Sub PollerCallback(ByVal hWnd As Long, ByVal uMsg As Long, _
-                           ByVal nIDEvent As Long, ByVal dwTime As Long)
-#End If
-    On Error Resume Next
-    PollForCommandsTimer
-    On Error GoTo 0
-End Sub
-
-Public Sub PollForCommandsTimer()
-    If Not pollerRunningFlag Then Exit Sub
-
-    Dim fso As Object
-    Dim folder As Object
-    Dim file As Object
-    Dim cmdDir As String
-    Dim cmdId As String
-    Dim macroName As String
-    Dim output As String
-    Dim ts As Object
-    Dim content As String
-    Dim status As String
-
-    cmdDir = GetCommandsDir()
-
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    If Not fso.FolderExists(cmdDir) Then
-        Set fso = Nothing
-        GoTo Reschedule
-    End If
-
-    Set folder = fso.GetFolder(cmdDir)
-
-    For Each file In folder.Files
-        If LCase(fso.GetExtensionName(file.Name)) = "json" Then
-            cmdId = fso.GetBaseName(file.Name)
-
-            On Error Resume Next
-            Set ts = fso.OpenTextFile(file.Path, 1)
-            If Err.Number <> 0 Then
-                On Error GoTo 0
-                GoTo NextFile
-            End If
-            content = ts.ReadAll
-            ts.Close
-            Set ts = Nothing
-            On Error GoTo 0
-
-            On Error Resume Next
-            fso.DeleteFile file.Path
-            On Error GoTo 0
-
-            macroName = ExtractJsonStringStd(content, "macro")
-            If Len(macroName) = 0 Then
-                WriteResultFile cmdId, "error", "Could not parse macro name from command"
-                GoTo NextFile
-            End If
-
-            output = DispatchMacroStd(macroName, content)
-            status = "ok"
-            If Left(output, 6) = "ERROR:" Then status = "error"
-
-            WriteResultFile cmdId, status, output
-        End If
-NextFile:
-    Next file
-
-    Set fso = Nothing
-
-Reschedule:
-    ' No rescheduling needed — Windows API SetTimer repeats automatically
-End Sub
-
-Private Function ExtractJsonStringStd(ByVal json As String, ByVal key As String) As String
-    Dim pos As Long
-    Dim valueStart As Long
-    Dim valueEnd As Long
-
-    ' Try "key":"value" first (compact JSON)
-    Dim searchKey As String
-    searchKey = """" & key & """:"""
-    pos = InStr(1, json, searchKey, vbTextCompare)
-    If pos > 0 Then
-        valueStart = pos + Len(searchKey)
-    Else
-        ' Try "key": "value" (Python json.dump default — space after colon)
-        searchKey = """" & key & """: """
-        pos = InStr(1, json, searchKey, vbTextCompare)
-        If pos > 0 Then
-            valueStart = pos + Len(searchKey)
-        Else
-            ExtractJsonStringStd = ""
-            Exit Function
-        End If
-    End If
-
-    valueEnd = InStr(valueStart, json, """")
-    If valueEnd = 0 Then
-        ExtractJsonStringStd = ""
-        Exit Function
-    End If
-
-    ExtractJsonStringStd = Mid(json, valueStart, valueEnd - valueStart)
-End Function
-
-Private Function DispatchMacroStd(ByVal macroName As String, Optional ByVal rawJson As String = "") As String
-    Dim result As String
-
-    On Error GoTo DispatchError
-
-    Select Case macroName
-        Case "FilterExistingDryRun"
-            result = CaptureFilterDryRunStd()
-
-        Case "FilterExistingEmails"
-            FilterExistingEmails
-            result = "FilterExistingEmails completed."
-
-        Case "ShowVersionInfo"
-            result = BuildVersionInfoStd()
-
-        Case "ReinitializeFilter"
-            ' Cannot use Application.Run from timer callback context, so call
-            ' the reinitialization logic directly from this standard module.
-            LoadAllSettings
-            LoadLearnedSenders True   ' forceReload
-            LoadLearnedSubjects True  ' forceReload
-            result = "Settings and learned rules reloaded."
-
-        Case "ScanSentForReplyPatterns"
-            EmailAgent.ScanSentForReplyPatterns
-            result = "Sent items scan complete."
-
-        Case "DraftReplyForSelected"
-            result = DraftReplyForSelectedStd()
-
-
-        Case "ShowLearnedSenders"
-            result = "Learned sender rules: " & GetLearnedSendersCount() & vbCrLf & _
-                     "File: " & GetLearnedSendersFilePath()
-
-        Case "ShowLearnedSendersList"
-            ShowLearnedSendersList
-            result = "Sender rules dumped to VBA Immediate Window (" & GetLearnedSendersCount() & " unique rules)."
-
-        Case "CleanLearnedSendersFile"
-            DeduplicateLearnedSenders
-            result = "Learned senders deduplicated. Unique rules: " & GetLearnedSendersCount()
-
-        Case "ShowLearnedSubjectsList"
-            ShowLearnedSubjectsList
-            result = "Subject rules dumped to VBA Immediate Window (" & GetLearnedSubjectsCount() & " unique rules)."
-
-        Case "CleanLearnedSubjectsFile"
-            DeduplicateLearnedSubjects
-            result = "Learned subjects deduplicated. Unique rules: " & GetLearnedSubjectsCount()
-
-        Case "ImportExistingLearnedFolders"
-            ImportExistingLearnedFolders
-            result = "Learned folder import complete."
-
-        Case "ImportExistingLearnedSubjectFolder"
-            ImportExistingLearnedSubjectFolder
-            result = "Learned subject folder import complete."
-
-        Case "ImportServerRules"
-            ImportServerRules
-            result = "Server rule import complete."
-
-        Case "ExportLearnedRulesToServer"
-            ExportLearnedRulesToServer
-            result = "Server rule export complete."
-
-        Case "RestoreFromReview"
-            RestoreFromReview
-            result = "Restore from Review complete."
-
-        Case "RestoreDeletedKeepEmails"
-            RestoreDeletedKeepEmails
-            result = "Restore deleted KEEP emails complete."
-
-        Case "GenerateAddressingPatterns"
-            EmailAgent.GenerateAddressingPatterns
-            result = "Addressing patterns generated."
-
-        Case "GenerateClassificationReport"
-            GenerateClassificationReport
-            result = "Classification report shown."
-
-        Case "SummarizeSelectedEmail"
-            result = SummarizeSelectedEmailStd()
-
-        Case "DraftReplyToSelected"
-            result = DraftReplyToSelectedStd()
-
-        Case "FilterAllFolders"
-            FilterAllFolders
-            result = "FilterAllFolders completed."
-
-        Case "FilterSelectedEmail"
-            FilterSelectedEmail
-            result = "FilterSelectedEmail completed — check Outlook for prompt."
-
-        Case "FilterSelectedEmails"
-            FilterSelectedEmails
-            result = "FilterSelectedEmails completed."
-
-        Case "FilterCurrentFolder"
-            FilterCurrentFolder
-            result = "FilterCurrentFolder completed."
-
-        Case "FilterLastNDays"
-            Dim daysArg As String
-            daysArg = ExtractJsonStringStd(rawJson, "days")
-            If Len(daysArg) > 0 And IsNumeric(daysArg) Then
-                FilterLastNDays CInt(daysArg)
-            Else
-                FilterLastNDays 7
-            End If
-            result = "FilterLastNDays completed."
-
-        Case "BulkDeleteBySender"
-            Dim patternArg As String
-            patternArg = ExtractJsonStringStd(rawJson, "pattern")
-            If Len(patternArg) > 0 Then
-                BulkDeleteBySender patternArg
-                result = "BulkDeleteBySender completed for: " & patternArg
-            Else
-                result = "ERROR: BulkDeleteBySender requires a sender pattern argument."
-            End If
-
-        Case "MoveProtectedSources"
-            MoveProtectedSources
-            result = "MoveProtectedSources completed."
-
-        Case "ShowLearnedRepliesSummary"
-            EmailAgent.ShowLearnedRepliesSummary
-            result = "Learned reply summary shown — check Outlook."
-
-        Case "ReloadLearnedSenders"
-            ReloadLearnedSenders
-            result = "Learned senders reloaded. Count: " & GetLearnedSendersCount()
-
-        Case "DetectAndMigrateOldFolders"
-            DetectAndMigrateOldFolders
-            result = "Old folder migration complete."
-
-        Case "EnableRealTimeFilter"
-            ' Requires WithEvents setup in ThisOutlookSession — cannot run from bridge.
-            result = "Cannot run from Web UI. In VBA Immediate Window (Ctrl+G), type:" & vbCrLf & _
-                     "  ThisOutlookSession.EnableRealTimeFilter"
-
-        Case "DisableRealTimeFilter"
-            result = "Cannot run from Web UI. In VBA Immediate Window (Ctrl+G), type:" & vbCrLf & _
-                     "  ThisOutlookSession.DisableRealTimeFilter"
-
-        Case "SyncLearnedRules"
-            SyncLearnedRules
-            result = "Cloud sync complete. Senders: " & GetLearnedSendersCount() & ", Subjects: " & GetLearnedSubjectsCount()
-
-        Case Else
-            result = "ERROR: Unknown macro: " & macroName
-
-    End Select
-
-    DispatchMacroStd = result
-    Exit Function
-
-DispatchError:
-    DispatchMacroStd = "ERROR: " & macroName & " failed: " & Err.Description
-End Function
-
-Private Function BuildVersionInfoStd() As String
-    Dim info As String
-    info = "Email Agent v" & FILTER_VERSION & " (" & FILTER_VERSION_DATE & ")" & vbCrLf
-    info = info & "Settings: " & GetSettingsFilePath() & vbCrLf
-    info = info & "Learned senders: " & GetLearnedSendersCount() & vbCrLf
-    info = info & "Learned subjects: " & GetLearnedSubjectsCount() & vbCrLf
-    info = info & "LLM: " & IIf(RuntimeUseLLM, "ON (" & RuntimeLLMProvider & ")", "OFF") & vbCrLf
-    info = info & "Self-improving: " & IIf(RuntimeEnableSelfImproving, "ON", "OFF") & vbCrLf
-    info = info & "Auto-reply: " & IIf(RuntimeEnableAutoReply, "ON", "OFF")
-    BuildVersionInfoStd = info
-End Function
-
-Private Function CaptureFilterDryRunStd() As String
-    Dim myFolder As Outlook.Folder
-    Dim myItems As Outlook.Items
-    Dim mail As Outlook.MailItem
-    Dim i As Long
-    Dim output As String
-    Dim decision As String
-    Dim icon As String
-    Dim processCount As Long
-
-    Set myFolder = Application.GetNamespace("MAPI").GetDefaultFolder(olFolderInbox)
-    Set myItems = myFolder.Items
-    myItems.Sort "[ReceivedTime]", True
-
-    output = "DRY RUN - First " & RuntimeDryRunLimit & " emails:" & vbCrLf
-    processCount = 0
-
-    For i = 1 To myItems.Count
-        If processCount >= RuntimeDryRunLimit Then Exit For
-        If TypeOf myItems(i) Is Outlook.MailItem Then
-            Set mail = myItems(i)
-            processCount = processCount + 1
-            decision = ClassifyEmail(mail)
-            Select Case decision
-                Case "DELETE"
-                    icon = IIf(lastClassifyWasLearned, "[xLR]", IIf(lastClassifyWasLearnedSubject, "[xLS]", "[DEL]"))
-                Case "MOVE_II": icon = "[II] "
-                Case "LLM_REVIEW": icon = "[???]"
-                Case "KEEP": icon = IIf(lastClassifyWasLearned, "[+LR]", "[OK] ")
-                Case Else: icon = "[???]"
-            End Select
-            output = output & icon & " " & Format(mail.ReceivedTime, "mm/dd hh:nn") & " | " & _
-                     Truncate(mail.SenderName, 20) & " | " & Truncate(mail.Subject, 40) & vbCrLf
-        End If
-    Next i
-
-    output = output & vbCrLf & "Total: " & processCount & " emails previewed."
-    CaptureFilterDryRunStd = output
-End Function
-
-' Bridge-friendly SummarizeSelectedEmail — returns result string instead of MsgBox
-Private Function SummarizeSelectedEmailStd() As String
-    On Error GoTo StdErr
-    Dim mail As Outlook.MailItem
-    Dim prompt As String
-    Dim summary As String
-    Dim systemPrompt As String
-
-    If Not RuntimeUseLLM Then
-        SummarizeSelectedEmailStd = "ERROR: LLM is not enabled. Set UseLLMAPI=True in settings."
-        Exit Function
-    End If
-
-    If Application.ActiveExplorer.Selection.Count = 0 Then
-        SummarizeSelectedEmailStd = "ERROR: No email selected. Please select an email in Outlook first."
-        Exit Function
-    End If
-
-    If Not TypeOf Application.ActiveExplorer.Selection(1) Is Outlook.MailItem Then
-        SummarizeSelectedEmailStd = "ERROR: Selected item is not an email."
-        Exit Function
-    End If
-
-    Set mail = Application.ActiveExplorer.Selection(1)
-
-    systemPrompt = "You are a helpful assistant. Summarize the following email concisely in 2-3 bullet points. " & _
-                   "Focus on: who sent it, what they want, and any action required."
-
-    prompt = "Summarize this email:" & vbCrLf & _
-             "From: " & mail.SenderName & " <" & GetSenderEmail(mail) & ">" & vbCrLf & _
-             "Subject: " & mail.Subject & vbCrLf & _
-             "Date: " & Format(mail.ReceivedTime, "yyyy-mm-dd hh:nn") & vbCrLf & _
-             "Body:" & vbCrLf & Truncate(mail.Body, 2000)
-
-    summary = CallLLM(prompt, systemPrompt, RuntimeSummarizeMaxTokens)
-
-    If Len(summary) = 0 Then
-        SummarizeSelectedEmailStd = "ERROR: LLM returned no response. Check your API configuration."
-        Exit Function
-    End If
-
-    SummarizeSelectedEmailStd = "Summary of: " & mail.Subject & vbCrLf & vbCrLf & summary
-    Exit Function
-StdErr:
-    SummarizeSelectedEmailStd = "ERROR: SummarizeSelectedEmail failed: " & Err.Description
-End Function
-
-' Bridge-friendly DraftReplyToSelected — returns result string, saves draft via DraftAutoReply, no MsgBox
-Private Function DraftReplyToSelectedStd() As String
-    On Error GoTo StdErr
-    Dim mail As Outlook.MailItem
-
-    If Not RuntimeUseLLM Then
-        DraftReplyToSelectedStd = "ERROR: LLM is not enabled. Set UseLLMAPI=True in settings."
-        Exit Function
-    End If
-
-    If Application.ActiveExplorer.Selection.Count = 0 Then
-        DraftReplyToSelectedStd = "ERROR: No email selected. Please select an email in Outlook first."
-        Exit Function
-    End If
-
-    If Not TypeOf Application.ActiveExplorer.Selection(1) Is Outlook.MailItem Then
-        DraftReplyToSelectedStd = "ERROR: Selected item is not an email."
-        Exit Function
-    End If
-
-    Set mail = Application.ActiveExplorer.Selection(1)
-
-    If DraftAutoReply(mail) Then
-        DraftReplyToSelectedStd = "Draft reply saved to Drafts for: " & mail.Subject
-    Else
-        DraftReplyToSelectedStd = "ERROR: Could not draft reply. Check LLM configuration and logs."
-    End If
-    Exit Function
-StdErr:
-    DraftReplyToSelectedStd = "ERROR: DraftReplyToSelected failed: " & Err.Description
-End Function
-
-' Bridge-friendly DraftReplyForSelected — drafts replies for all selected emails, no MsgBox
-Private Function DraftReplyForSelectedStd() As String
-    On Error GoTo StdErr
-    Dim sel As Outlook.Selection
-    Dim mail As Outlook.MailItem
-    Dim i As Long
-    Dim draftedCount As Long
-    Dim skippedCount As Long
-
-    If Not RuntimeUseLLM Then
-        DraftReplyForSelectedStd = "ERROR: LLM is not enabled. Set UseLLMAPI=True in settings."
-        Exit Function
-    End If
-
-    Set sel = Application.ActiveExplorer.Selection
-
-    If sel.Count = 0 Then
-        DraftReplyForSelectedStd = "ERROR: No email selected. Please select one or more emails in Outlook first."
-        Exit Function
-    End If
-
-    draftedCount = 0
-    skippedCount = 0
-
-    For i = 1 To sel.Count
-        If Not TypeOf sel(i) Is Outlook.MailItem Then
-            skippedCount = skippedCount + 1
-        Else
-            Set mail = sel(i)
-            If DraftAutoReply(mail) Then
-                draftedCount = draftedCount + 1
-            Else
-                skippedCount = skippedCount + 1
-            End If
-        End If
-    Next i
-
-    DraftReplyForSelectedStd = "Draft replies complete. Drafted: " & draftedCount & ", Skipped: " & skippedCount & ". Check your Drafts folder."
-    Exit Function
-StdErr:
-    DraftReplyForSelectedStd = "ERROR: DraftReplyForSelected failed: " & Err.Description
-End Function

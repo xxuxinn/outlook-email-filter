@@ -1,8 +1,10 @@
-# Macro Reference — Outlook Email Agent v3.0
+# Macro Reference — Outlook Email Agent v3.1
 
 Full list of callable macros. Assign frequently used ones to the Quick Access Toolbar (QAT) via File → Options → Quick Access Toolbar → Macros.
 
-**Recommended QAT buttons**: `FilterSelectedEmails`, `FilterCurrentFolder`, `FilterExistingDryRun`, `DraftReplyForSelected`, `ExportLearnedRulesToServer`
+**Recommended QAT buttons**: `FilterSelectedEmails`, `FilterCurrentFolder`, `FilterExistingDryRun`, `DraftReplyForSelected`, `GenerateDailyDigest`
+
+> **v3.1 note — interactive vs. headless**: every bulk macro now has two halves. The macro listed here is the interactive "button" (confirmation dialog + result popup). A matching `<Name>Core` function runs silently and returns a real result string — that's what the Web UI / MCP bridge calls, so bridge results now report actual counts and honest `ERROR:` messages instead of a hardcoded "completed."
 
 ## Version
 
@@ -25,11 +27,20 @@ Full list of callable macros. Assign frequently used ones to the Quick Access To
 | `BulkDeleteBySender "pattern"` | Delete all from matching senders |
 | `MoveProtectedSources` | Move protected domain emails to Protected folder |
 
-## Agent Tools (v3.0)
+## Digest & Rule Mining (v3.1)
 
 | Macro | Purpose |
 |-------|---------|
-| `GenerateAddressingPatterns` | LLM-generates name/greeting patterns from inputted name |
+| `GenerateDailyDigest` | Build the ranked 24 h triage digest → `digests\digest_YYYY-MM-DD.md` (+ self-email, + deadline Tasks if enabled) |
+| `ProposeRules` | LLM mines Review folder + decision log → rule proposals (approve in Web UI) |
+
+> Both also run automatically via the poller scheduler when `EnableDailyDigest` / `EnableRuleMining` are on (`[Digest]` in settings.ini) — daily after `DigestHour`, mining weekly.
+
+## Agent Tools
+
+| Macro | Purpose |
+|-------|---------|
+| `GenerateAddressingPatterns` | LLM-generates name/greeting patterns from inputted name (bridge variant `GenerateAddressingPatternsStd` takes name/title/role as arguments) |
 | `ScanSentForReplyPatterns` | Scans Sent Items for reply pairs → `learned_replies.txt` |
 | `DraftReplyForSelected` | Draft few-shot replies for selected email(s) → Drafts folder |
 | `ShowLearnedRepliesSummary` | Show learned reply pair count and file path |
@@ -41,7 +52,7 @@ Full list of callable macros. Assign frequently used ones to the Quick Access To
 | `SummarizeSelectedEmail` | Summarize selected email using LLM |
 | `DraftReplyToSelected` | Draft a reply using LLM few-shot engine (delegates to `DraftAutoReply`) |
 
-> **Note**: `SummarizeSelectedEmail` and `DraftReplyToSelected` have bridge-friendly `*Std()` variants in Utilities.bas (`SummarizeSelectedEmailStd`, `DraftReplyToSelectedStd`) that are called automatically from the Web UI command bridge.
+> **Note**: `SummarizeSelectedEmail` and `DraftReplyToSelected` have bridge-friendly `*Std()` variants in Bridge.bas (`SummarizeSelectedEmailStd`, `DraftReplyToSelectedStd`) that are called automatically from the Web UI command bridge.
 
 ## Learned Rules
 

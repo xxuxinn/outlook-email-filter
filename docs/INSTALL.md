@@ -31,10 +31,13 @@ In the VBA Editor, go to **File → Import File...** and import each of these (i
 | File | Notes |
 |------|-------|
 | `src/Config.bas` | Constants and runtime variables |
-| `src/Utilities.bas` | Helpers, LLM routing, file I/O |
+| `src/Utilities.bas` | Helpers, LLM routing, UTF-8 file I/O |
+| `src/AgentMemory.bas` | Decision log, sender history, correction capture (v3.1) |
 | `src/EmailFilter.bas` | Classification engine |
 | `src/EmailAgent.bas` | Agent tools (addressing, auto-reply) |
+| `src/EmailDigest.bas` | Daily digest + rule mining (v3.1) |
 | `src/BatchFilter.bas` | Bulk operations and macros |
+| `src/Bridge.bas` | Web UI/MCP command bridge + scheduler (v3.1) |
 
 > **Do NOT import `src/ThisOutlookSession.bas`** — it requires special handling (next step).
 

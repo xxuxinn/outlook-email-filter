@@ -1,8 +1,13 @@
 '===============================================================================
-' EmailFilter.bas - Main Classification Logic v3.0
+' EmailFilter.bas - Main Classification Logic v3.1
 '===============================================================================
 ' This module contains the core email classification functions,
 ' LLM integration (via multi-provider CallLLM), and LLM email tools.
+'
+' v3.1: LLM classification is structured (JSON with action/category/urgency/
+' confidence), enriched with sender history from AgentMemory, gated by a
+' confidence threshold, and every executed decision is recorded to
+' decision_log.txt.
 '
 ' All pattern/setting references use Runtime* variables from Config.bas,
 ' loaded from settings.ini by LoadAllSettings at startup.
@@ -15,6 +20,15 @@ Public lastClassifyWasLearned As Boolean
 
 ' Flag set by ClassifyEmail when a learned subject rule was applied
 Public lastClassifyWasLearnedSubject As Boolean
+
+' Which rule produced the last ClassifyEmail decision (for decision_log.txt)
+Public lastClassifySource As String
+
+' Structured outputs of the last LLM classification (see ClassifyViaLLMEx)
+Public lastLLMConfidence As Double
+Public lastLLMUrgency As Long
+Public lastLLMCategory As String
+Public lastLLMReason As String
 
 '-------------------------------------------------------------------------------
 ' MAIN CLASSIFICATION FUNCTION
@@ -41,9 +55,10 @@ Public Function ClassifyEmail(ByVal mail As Outlook.MailItem) As String
 
     LogMessage "DEBUG", "Classifying: " & Truncate(subject, 50)
 
-    ' Reset learned-rule flags
+    ' Reset learned-rule flags and decision source
     lastClassifyWasLearned = False
     lastClassifyWasLearnedSubject = False
+    lastClassifySource = ""
 
     ' =========================================================================
     ' RULE 0: LEARNED SENDER RULES (highest priority, from self-improving)
@@ -55,13 +70,15 @@ Public Function ClassifyEmail(ByVal mail As Outlook.MailItem) As String
         If learnedAction = "KEEP" Then
             ClassifyEmail = "KEEP"
             lastClassifyWasLearned = True
+            lastClassifySource = "LEARNED_SENDER"
             LogMessage "DEBUG", "  -> KEEP (learned rule for: " & senderEmail & ")"
-            Exit Function
+            GoTo PROC_EXIT
         ElseIf learnedAction = "DELETE" Then
             ClassifyEmail = "DELETE"
             lastClassifyWasLearned = True
+            lastClassifySource = "LEARNED_SENDER"
             LogMessage "DEBUG", "  -> DELETE (learned rule for: " & senderEmail & ")"
-            Exit Function
+            GoTo PROC_EXIT
         End If
         ' Empty string = no learned rule, fall through
     End If
@@ -76,8 +93,9 @@ Public Function ClassifyEmail(ByVal mail As Outlook.MailItem) As String
         If learnedSubjectAction = "DELETE" Then
             ClassifyEmail = "DELETE"
             lastClassifyWasLearnedSubject = True
+            lastClassifySource = "LEARNED_SUBJECT"
             LogMessage "DEBUG", "  -> DELETE (learned subject rule match)"
-            Exit Function
+            GoTo PROC_EXIT
         End If
     End If
 
@@ -86,8 +104,9 @@ Public Function ClassifyEmail(ByVal mail As Outlook.MailItem) As String
     ' =========================================================================
     If IsProtectedDomain(domain) Then
         ClassifyEmail = "MOVE_II"
+        lastClassifySource = "RULE1_PROTECTED"
         LogMessage "DEBUG", "  -> MOVE_II (protected domain: " & domain & ")"
-        Exit Function
+        GoTo PROC_EXIT
     End If
 
     ' =========================================================================
@@ -95,8 +114,9 @@ Public Function ClassifyEmail(ByVal mail As Outlook.MailItem) As String
     ' =========================================================================
     If IsPersonallyAddressed(subject, bodyStart) Then
         ClassifyEmail = "KEEP"
+        lastClassifySource = "RULE2_PERSONAL"
         LogMessage "DEBUG", "  -> KEEP (personally addressed)"
-        Exit Function
+        GoTo PROC_EXIT
     End If
 
     ' =========================================================================
@@ -104,8 +124,9 @@ Public Function ClassifyEmail(ByVal mail As Outlook.MailItem) As String
     ' =========================================================================
     If ContainsAny(subject, RuntimePolyUTags) Then
         ClassifyEmail = "KEEP"
+        lastClassifySource = "RULE3_ORGTAG"
         LogMessage "DEBUG", "  -> KEEP (org tag found)"
-        Exit Function
+        GoTo PROC_EXIT
     End If
 
     ' =========================================================================
@@ -113,8 +134,9 @@ Public Function ClassifyEmail(ByVal mail As Outlook.MailItem) As String
     ' =========================================================================
     If ContainsAny(subject, RuntimeVIPKeywords) Then
         ClassifyEmail = "KEEP"
+        lastClassifySource = "RULE4_VIP"
         LogMessage "DEBUG", "  -> KEEP (VIP keyword)"
-        Exit Function
+        GoTo PROC_EXIT
     End If
 
     ' =========================================================================
@@ -122,8 +144,9 @@ Public Function ClassifyEmail(ByVal mail As Outlook.MailItem) As String
     ' =========================================================================
     If IsReplyEmail(subject) Then
         ClassifyEmail = "KEEP"
+        lastClassifySource = "RULE5_REPLY"
         LogMessage "DEBUG", "  -> KEEP (reply chain)"
-        Exit Function
+        GoTo PROC_EXIT
     End If
 
     ' =========================================================================
@@ -131,8 +154,9 @@ Public Function ClassifyEmail(ByVal mail As Outlook.MailItem) As String
     ' =========================================================================
     If IsForwardEmail(subject) Then
         ClassifyEmail = "KEEP"
+        lastClassifySource = "RULE6_FORWARD"
         LogMessage "DEBUG", "  -> KEEP (forwarded)"
-        Exit Function
+        GoTo PROC_EXIT
     End If
 
     ' =========================================================================
@@ -140,8 +164,9 @@ Public Function ClassifyEmail(ByVal mail As Outlook.MailItem) As String
     ' =========================================================================
     If ContainsAny(senderName, RuntimeDeleteKnownSenders) Then
         ClassifyEmail = "DELETE"
+        lastClassifySource = "RULE7_KNOWN_SENDER"
         LogMessage "DEBUG", "  -> DELETE (known sender: " & senderName & ")"
-        Exit Function
+        GoTo PROC_EXIT
     End If
 
     ' =========================================================================
@@ -149,8 +174,9 @@ Public Function ClassifyEmail(ByVal mail As Outlook.MailItem) As String
     ' =========================================================================
     If ContainsAny(senderEmail, RuntimeDeleteSenderPatterns) Then
         ClassifyEmail = "DELETE"
+        lastClassifySource = "RULE8_SENDER_PATTERN"
         LogMessage "DEBUG", "  -> DELETE (sender pattern)"
-        Exit Function
+        GoTo PROC_EXIT
     End If
 
     ' =========================================================================
@@ -158,14 +184,16 @@ Public Function ClassifyEmail(ByVal mail As Outlook.MailItem) As String
     ' =========================================================================
     If ContainsAny(subject, RuntimeDeleteSubjectPatterns) Then
         ClassifyEmail = "DELETE"
+        lastClassifySource = "RULE9_SUBJECT_PATTERN"
         LogMessage "DEBUG", "  -> DELETE (subject pattern)"
-        Exit Function
+        GoTo PROC_EXIT
     End If
 
     ' =========================================================================
     ' RULE 10: AMBIGUOUS - Send to LLM or Review folder
     ' =========================================================================
     ClassifyEmail = "LLM_REVIEW"
+    lastClassifySource = "RULE10_AMBIGUOUS"
     LogMessage "DEBUG", "  -> LLM_REVIEW (no rule matched)"
 
 PROC_EXIT:
@@ -174,6 +202,7 @@ PROC_EXIT:
 PROC_ERR:
     LogError "EmailFilter", "ClassifyEmail", Err.Number, Err.Description
     ClassifyEmail = "KEEP"  ' Safe default: keep on error
+    lastClassifySource = "ERROR_DEFAULT"
     Resume PROC_EXIT
 End Function
 
@@ -237,25 +266,41 @@ End Function
 ' EXECUTE CLASSIFICATION ACTION
 '-------------------------------------------------------------------------------
 
-' Execute the classification decision on an email
-Public Sub ExecuteAction(ByVal mail As Outlook.MailItem, ByVal decision As String, Optional ByVal stats As Object = Nothing)
+' Execute the classification decision on an email.
+' Records every executed decision to decision_log.txt (source from
+' lastClassifySource set by ClassifyEmail). resolvedAction (optional out)
+' receives the final action after LLM_REVIEW resolution: KEEP / DELETE /
+' MOVE_II / REVIEW — callers like the real-time handler use it to trigger
+' auto-reply only on resolved KEEPs.
+Public Sub ExecuteAction(ByVal mail As Outlook.MailItem, ByVal decision As String, _
+                         Optional ByVal stats As Object = Nothing, _
+                         Optional ByRef resolvedAction As String)
     On Error GoTo PROC_ERR
     PushCallStack "EmailFilter.ExecuteAction"
 
     ' Capture email info BEFORE any action (mail object becomes invalid after delete/move)
     Dim senderName As String
     Dim subject As String
+    Dim senderEmail As String
+    Dim source As String
     senderName = mail.senderName
     subject = mail.subject
+    senderEmail = GetSenderEmail(mail)
+    source = lastClassifySource
+    If Len(source) = 0 Then source = "UNKNOWN"
+
+    resolvedAction = decision
 
     Select Case decision
         Case "MOVE_II"
             LogActionDirect senderName, subject, "MOVED to " & RuntimeFolderProtected
+            RecordDecision senderEmail, subject, source, "MOVE_II", 1
             mail.Move GetOrCreateFolder(RuntimeFolderProtected)
             If Not stats Is Nothing Then IncrementStat stats, "MOVE_II"
 
         Case "DELETE"
             LogActionDirect senderName, subject, "DELETED"
+            RecordDecision senderEmail, subject, source, "DELETE", 1
             mail.Delete
             If Not stats Is Nothing Then IncrementStat stats, "DELETE"
 
@@ -265,26 +310,35 @@ Public Sub ExecuteAction(ByVal mail As Outlook.MailItem, ByVal decision As Strin
             llmDecision = ProcessAmbiguousEmail(mail)
 
             If llmDecision = "DELETE" Then
-                LogActionDirect senderName, subject, "DELETED (LLM)"
+                LogActionDirect senderName, subject, "DELETED (LLM: " & Truncate(lastLLMReason, 60) & ")"
+                RecordDecision senderEmail, subject, "LLM", "DELETE", lastLLMConfidence
                 mail.Delete
+                resolvedAction = "DELETE"
                 If Not stats Is Nothing Then IncrementStat stats, "DELETE"
             ElseIf llmDecision = "KEEP" Then
-                LogActionDirect senderName, subject, "KEPT (LLM)"
+                LogActionDirect senderName, subject, "KEPT (LLM: " & Truncate(lastLLMReason, 60) & ")"
+                RecordDecision senderEmail, subject, "LLM", "KEEP", lastLLMConfidence
+                ApplyUrgencyMarkers mail
+                resolvedAction = "KEEP"
                 If Not stats Is Nothing Then IncrementStat stats, "KEEP"
             Else
                 ' Move to Review folder
                 LogActionDirect senderName, subject, "MOVED to " & RuntimeFolderReview
+                RecordDecision senderEmail, subject, IIf(RuntimeUseLLM, "LLM", "DEFAULT"), "REVIEW", lastLLMConfidence
                 mail.Move GetOrCreateFolder(RuntimeFolderReview)
+                resolvedAction = "REVIEW"
                 If Not stats Is Nothing Then IncrementStat stats, "REVIEW"
             End If
 
         Case "KEEP"
             ' Do nothing, leave in current folder
             LogActionDirect senderName, subject, "KEPT"
+            RecordDecision senderEmail, subject, source, "KEEP", 1
             If Not stats Is Nothing Then IncrementStat stats, "KEEP"
 
         Case Else
             LogMessage "WARN", "Unknown decision: " & decision
+            resolvedAction = "KEEP"
             If Not stats Is Nothing Then IncrementStat stats, "KEEP"
     End Select
 
@@ -297,6 +351,41 @@ PROC_ERR:
     Resume PROC_EXIT
 End Sub
 
+' Mark high-urgency KEEP emails so triage is visible inside Outlook itself:
+' urgency 4-5 -> "Urgent" category + high importance; urgency 3 -> "Action" category.
+Private Sub ApplyUrgencyMarkers(ByVal mail As Outlook.MailItem)
+    On Error GoTo PROC_ERR
+    PushCallStack "EmailFilter.ApplyUrgencyMarkers"
+
+    If lastLLMUrgency >= 4 Then
+        If InStr(1, mail.Categories, "Urgent", vbTextCompare) = 0 Then
+            If Len(mail.Categories) > 0 Then
+                mail.Categories = mail.Categories & ";Urgent"
+            Else
+                mail.Categories = "Urgent"
+            End If
+        End If
+        mail.Importance = olImportanceHigh
+        mail.Save
+    ElseIf lastLLMUrgency = 3 Then
+        If InStr(1, mail.Categories, "Action", vbTextCompare) = 0 Then
+            If Len(mail.Categories) > 0 Then
+                mail.Categories = mail.Categories & ";Action"
+            Else
+                mail.Categories = "Action"
+            End If
+            mail.Save
+        End If
+    End If
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "EmailFilter", "ApplyUrgencyMarkers", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
 '-------------------------------------------------------------------------------
 ' LLM INTEGRATION
 '-------------------------------------------------------------------------------
@@ -305,14 +394,20 @@ End Sub
 Private Function ProcessAmbiguousEmail(ByVal mail As Outlook.MailItem) As String
     Dim apiKey As String
 
+    ' Reset structured outputs
+    lastLLMConfidence = 0
+    lastLLMUrgency = 0
+    lastLLMCategory = ""
+    lastLLMReason = ""
+
     ' Check if LLM is enabled and configured
     If Not RuntimeUseLLM Then
         ProcessAmbiguousEmail = "REVIEW"
         Exit Function
     End If
 
-    ' Local provider does not require an API key
-    If RuntimeLLMProvider <> "local" Then
+    ' Local provider does not require an API key (normalize like CallLLM does)
+    If LCase(Trim(RuntimeLLMProvider)) <> "local" Then
         apiKey = GetAPIKey()
         If Len(apiKey) = 0 Then
             LogMessage "WARN", "LLM enabled but API key not found"
@@ -321,9 +416,9 @@ Private Function ProcessAmbiguousEmail(ByVal mail As Outlook.MailItem) As String
         End If
     End If
 
-    ' Call LLM
+    ' Call LLM (structured classification)
     On Error GoTo FallbackToReview
-    ProcessAmbiguousEmail = ClassifyViaLLM(BuildEmailPrompt(mail))
+    ProcessAmbiguousEmail = ClassifyViaLLMEx(mail)
     Exit Function
 
 FallbackToReview:
@@ -331,33 +426,107 @@ FallbackToReview:
     ProcessAmbiguousEmail = "REVIEW"
 End Function
 
-' Build the prompt for LLM classification
+' Build the structured classification prompt: email details + sender history
+' evidence (AgentMemory) + past user corrections + strict JSON output format.
 Private Function BuildEmailPrompt(ByVal mail As Outlook.MailItem) As String
     Dim prompt As String
+    Dim senderContext As String
+    Dim corrections As String
 
     prompt = "Classify this email:" & vbCrLf
     prompt = prompt & "From: " & mail.senderName & " <" & GetSenderEmail(mail) & ">" & vbCrLf
     prompt = prompt & "Subject: " & mail.subject & vbCrLf
     prompt = prompt & "Body preview: " & Truncate(mail.Body, RuntimeClassifyBodyChars) & vbCrLf
-    prompt = prompt & vbCrLf
-    prompt = prompt & "Respond with ONLY 'DELETE' or 'KEEP' followed by brief reason."
+
+    ' Deterministic evidence about this sender (counts from decision_log.txt,
+    ' replied-before signal from learned_replies.txt)
+    senderContext = GetSenderContext(GetSenderEmail(mail), mail.senderName)
+    If Len(senderContext) > 0 Then
+        prompt = prompt & vbCrLf & senderContext & vbCrLf
+    End If
+
+    ' Few-shot corrections: LLM decisions the user has reversed
+    corrections = GetRecentCorrectionsBlock(5)
+    If Len(corrections) > 0 Then
+        prompt = prompt & vbCrLf & corrections
+    End If
+
+    prompt = prompt & vbCrLf & _
+        "Respond with ONLY a JSON object, no other text:" & vbCrLf & _
+        "{""action"":""KEEP"" or ""DELETE""," & vbCrLf & _
+        " ""category"":""student|colleague|admin|newsletter|external|other""," & vbCrLf & _
+        " ""urgency"":1-5 (5 = needs response today)," & vbCrLf & _
+        " ""confidence"":0.0-1.0 (how sure you are)," & vbCrLf & _
+        " ""reason"":""max 15 words""}"
 
     BuildEmailPrompt = prompt
 End Function
 
-' Call LLM for classification — routes through CallLLM in Utilities.bas
-Private Function ClassifyViaLLM(ByVal prompt As String) As String
-    Dim result As String
-    result = CallLLM(prompt, RuntimeLLMSystemPrompt, RuntimeClassifyMaxTokens)
+' Structured LLM classification. Returns "KEEP", "DELETE", or "REVIEW" and sets
+' lastLLMConfidence / lastLLMUrgency / lastLLMCategory / lastLLMReason.
+' Safety gates:
+'   - JSON parse failure falls back to legacy substring matching at 0.5 confidence
+'   - DELETE below RuntimeConfidenceThreshold is demoted to REVIEW (a human
+'     looks at anything the model is unsure about deleting)
+Public Function ClassifyViaLLMEx(ByVal mail As Outlook.MailItem) As String
+    On Error GoTo PROC_ERR
+    PushCallStack "EmailFilter.ClassifyViaLLMEx"
 
-    ' Extract decision from LLM response
-    If InStr(1, UCase(result), "DELETE", vbTextCompare) > 0 Then
-        ClassifyViaLLM = "DELETE"
-    ElseIf InStr(1, UCase(result), "KEEP", vbTextCompare) > 0 Then
-        ClassifyViaLLM = "KEEP"
-    Else
-        ClassifyViaLLM = "REVIEW"
+    Dim result As String
+    Dim action As String
+
+    ' The user-configurable system prompt supplies the KEEP/DELETE policy; the
+    ' appended override pins the output format regardless of how the legacy
+    ' prompt phrases it.
+    Dim systemPrompt As String
+    systemPrompt = RuntimeLLMSystemPrompt & vbCrLf & _
+                   "FORMAT OVERRIDE: You MUST respond with only the requested JSON object."
+
+    result = CallLLM(BuildEmailPrompt(mail), systemPrompt, RuntimeClassifyMaxTokens)
+
+    If Len(result) = 0 Then
+        ClassifyViaLLMEx = "REVIEW"
+        GoTo PROC_EXIT
     End If
+
+    action = UCase(Trim(ExtractJSONStringValue(result, "action")))
+
+    If action = "KEEP" Or action = "DELETE" Then
+        lastLLMConfidence = ExtractJSONNumberValue(result, "confidence", 0.5)
+        lastLLMUrgency = CLng(ExtractJSONNumberValue(result, "urgency", 0))
+        lastLLMCategory = ExtractJSONStringValue(result, "category")
+        lastLLMReason = ExtractJSONStringValue(result, "reason")
+    Else
+        ' Legacy fallback: model ignored the JSON format — substring match
+        If InStr(1, UCase(result), "DELETE", vbTextCompare) > 0 Then
+            action = "DELETE"
+        ElseIf InStr(1, UCase(result), "KEEP", vbTextCompare) > 0 Then
+            action = "KEEP"
+        Else
+            action = "REVIEW"
+        End If
+        lastLLMConfidence = 0.5
+        lastLLMReason = Truncate(result, 100)
+        LogMessage "DEBUG", "ClassifyViaLLMEx: non-JSON response, fell back to substring match"
+    End If
+
+    ' Confidence gate: uncertain DELETEs go to Review instead of the bin
+    If action = "DELETE" And lastLLMConfidence < RuntimeConfidenceThreshold Then
+        LogMessage "INFO", "ClassifyViaLLMEx: DELETE demoted to REVIEW (confidence " & _
+                   Format(lastLLMConfidence, "0.00") & " < threshold " & _
+                   Format(RuntimeConfidenceThreshold, "0.00") & ")"
+        action = "REVIEW"
+    End If
+
+    ClassifyViaLLMEx = action
+
+PROC_EXIT:
+    PopCallStack
+    Exit Function
+PROC_ERR:
+    LogError "EmailFilter", "ClassifyViaLLMEx", Err.Number, Err.Description
+    ClassifyViaLLMEx = "REVIEW"
+    Resume PROC_EXIT
 End Function
 
 ' Backwards-compatible wrapper — delegates to CallLLM in Utilities.bas.
