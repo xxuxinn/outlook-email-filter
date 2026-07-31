@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Web UI (Flask)",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["webui/server.py"],
+      "port": 5000
+    }
+  ]
+}

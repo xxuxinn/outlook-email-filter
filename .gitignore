@@ -7,8 +7,9 @@
 .tmp.drivedownload/
 .tmp.driveupload/
 
-# Claude Code
-.claude/
+# Claude Code — track project agents/launch config so they sync across devices;
+# only the per-machine permission file stays local
+.claude/settings.local.json
 
 # VBA binary files (if accidentally created)
 *.frx
