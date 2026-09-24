@@ -32,3 +32,6 @@ __pycache__/
 
 # Session logs
 claude-scheduled-resume.log
+
+# Nimbalyst auto-generated plugin manifest (local tool state)
+.claude/plugins/.nimbalyst-generated/
