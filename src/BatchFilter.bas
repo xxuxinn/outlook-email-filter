@@ -2432,6 +2432,15 @@ Public Function ExportLearnedRulesToServerCore(Optional ByVal removeExisting As 
     stepName = "create subject rules"
     ExportRuleBatches colRules, cleanSubjects, False, subjectRuleCount, skippedCount
 
+    ' Every value was rejected: don't save, or the removal of the old exports
+    ' would reach the server and leave nothing in their place
+    If senderRuleCount + subjectRuleCount = 0 Then
+        status = "FAILED"
+        detail = "server rejected all " & skippedCount & " values"
+        ExportLearnedRulesToServerCore = "ERROR: the server rejected every rule (see error.log). Nothing was changed on the server."
+        GoTo PROC_EXIT
+    End If
+
     ' --- Step 4: Save all rules to server ---
     stepName = "save"
     On Error Resume Next
@@ -2582,7 +2591,7 @@ Private Sub WriteRuleSyncRecord(ByVal status As String, ByVal stepName As String
     AppendLineUTF8 Environ("APPDATA") & "\" & LEARNED_DATA_FOLDER & "\" & RULE_SYNC_LOG_FILE, _
                    Format(Now, "yyyy-mm-dd hh:nn:ss") & "|" & status & "|" & stepName & "|" & _
                    removedCount & "|" & senderRules & "|" & subjectRules & "|" & skippedCount & "|" & _
-                   Replace(Replace(detail, "|", " "), vbCrLf, " ")
+                   Replace(Replace(Replace(detail, "|", " "), vbCr, " "), vbLf, " ")
 End Sub
 
 '-------------------------------------------------------------------------------
