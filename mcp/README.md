@@ -32,6 +32,7 @@
 | `get_latest_digest()` | `digests/digest_*.md` | Full content of the newest digest |
 | `get_recent_decisions(n=50)` | `decision_log.txt` | Last N decisions (`timestamp\|sender\|subject\|source\|action\|confidence`) as a table |
 | `get_error_log(n=50)` | `error.log` | Last N error-log lines |
+| `get_rule_sync_log(n=20)` | `rule_sync.log` | Last N server-rule exports: status, failing step, rule counts |
 
 ### Write-backed
 

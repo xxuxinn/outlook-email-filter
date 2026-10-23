@@ -18,6 +18,7 @@ All data files live under `%APPDATA%\OutlookEmailFilter\`. The folder is auto-cr
 | `digests/digest_YYYY-MM-DD.md` | Markdown | Daily triage digest, one file per day (v3.1) |
 | `webui_token.txt` | 32 hex chars | Web UI auth token (created by server.py) |
 | `error.log` | Pipe-delimited, append-only | Structured error log (rotated to `.old` at 2 MB) |
+| `rule_sync.log` | Pipe-delimited, append-only | One line per server rule export (status, failing step, counts) |
 | `llm_debug.log` | Multi-line blocks | LLM request/response debug log (only when LogLevel=DEBUG; rotated at 5 MB) |
 | `commands/*.json` / `*.result` | JSON | Web UI/MCP command bridge (transient, auto-cleaned) |
 
@@ -209,6 +210,23 @@ Fields: `timestamp|module.procedure|errNum|errDesc|[context]|Stack: ...`
 - Written by `LogError(moduleName, procName, errNum, errDesc, [context])`
 - All errors also go to `Debug.Print` (VBA Immediate Window)
 - Enable `DebugMode=True` in settings.ini to also get a MsgBox on each error
+
+---
+
+## rule_sync.log
+
+**Format**: pipe-delimited, one line per `ExportLearnedRulesToServer` run (macro, Web UI or MCP)
+```
+2026-10-23 11:40:00|OK|save|3|2|1|0|
+2026-10-23 11:52:10|FAILED|read rules|0|0|0|0|Error -2147352567: One or more rules is in conflict...
+```
+
+Fields: `timestamp|status|step|removed|sender_rules|subject_rules|skipped|detail`
+
+- `status`: `OK`, `FAILED` or `NOOP` (nothing to export / self-improving disabled)
+- `step`: where the run ended — `load`, `read rules`, `remove old exports`, `create sender rules`, `create subject rules`, `save`. A failure at `read rules` or `remove old exports` means the server rules were already in conflict before the export touched them; fix in Home → Rules → Manage Rules & Alerts
+- Rules are built in memory and only reach Exchange on `save`, so any `FAILED` run left the server unchanged
+- Read with MCP `get_rule_sync_log(n)`
 
 ---
 

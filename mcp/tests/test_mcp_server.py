@@ -35,6 +35,7 @@ EXPECTED_TOOLS = {
     "get_latest_digest",
     "get_recent_decisions",
     "get_error_log",
+    "get_rule_sync_log",
     "add_learned_sender_rule",
 }
 
@@ -188,6 +189,18 @@ def test_get_error_log(data_dir: Path) -> None:
     out = call_tool("get_error_log", {"n": 1})
     assert "Utilities.CallLLM" in out
     assert "ClassifyEmail" not in out
+
+
+def test_get_rule_sync_log(data_dir: Path) -> None:
+    assert call_tool("get_rule_sync_log").startswith("No rule sync log")
+    (data_dir / "rule_sync.log").write_text(
+        "2026-10-23 09:00:00|OK|save|3|2|1|0|\n"
+        "2026-10-23 10:00:00|FAILED|read rules|0|0|0|0|Error -2147352567: rules in conflict\n",
+        encoding="utf-8",
+    )
+    out = call_tool("get_rule_sync_log", {"n": 1})
+    assert "FAILED" in out and "read rules" in out and "conflict" in out
+    assert "OK " not in out
 
 
 # ---------------------------------------------------------------------------

@@ -2248,10 +2248,8 @@ End Function
 
 ' Export learned DELETE rules as server-side Outlook Rules (interactive wrapper)
 Public Sub ExportLearnedRulesToServer()
-    Dim colRules As Object          ' Outlook.Rules
     Dim response As VbMsgBoxResult
     Dim existingCount As Long
-    Dim i As Long
     Dim senderCount As Long
     Dim subjectCount As Long
     Dim removeExisting As Boolean
@@ -2291,15 +2289,7 @@ Public Sub ExportLearnedRulesToServer()
 
     If response <> vbYes Then GoTo PROC_EXIT
 
-    ' Check for existing export rules (read-only peek for the second dialog)
-    Set colRules = Application.Session.DefaultStore.GetRules()
-    existingCount = 0
-    For i = colRules.Count To 1 Step -1
-        If Left(colRules.Item(i).Name, 18) = "VBA Filter Export " Then
-            existingCount = existingCount + 1
-        End If
-    Next i
-    Set colRules = Nothing  ' Core gets its own fresh Rules collection
+    existingCount = CountExportRules()
 
     removeExisting = True
     If existingCount > 0 Then
@@ -2313,7 +2303,8 @@ Public Sub ExportLearnedRulesToServer()
     End If
 
     resultText = ExportLearnedRulesToServerCore(removeExisting)
-    MsgBox resultText, vbInformation, "Export Learned Rules to Server"
+    MsgBox resultText, IIf(Left(resultText, 5) = "ERROR", vbExclamation, vbInformation), _
+           "Export Learned Rules to Server"
 
 PROC_EXIT:
     PopCallStack
@@ -2323,55 +2314,64 @@ PROC_ERR:
     Resume PROC_EXIT
 End Sub
 
+' Count existing "VBA Filter Export" rules for the confirmation dialog.
+' Best effort: if the rules can't be read (e.g. they are in conflict), returns 0;
+' Core then hits the same error, records it in rule_sync.log and explains the fix.
+Private Function CountExportRules() As Long
+    Dim colRules As Object          ' Outlook.Rules
+    Dim i As Long
+
+    On Error GoTo PROC_ERR
+    Set colRules = Application.Session.DefaultStore.GetRules()
+    For i = colRules.Count To 1 Step -1
+        If Left(colRules.Item(i).Name, 18) = "VBA Filter Export " Then
+            CountExportRules = CountExportRules + 1
+        End If
+    Next i
+    Exit Function
+PROC_ERR:
+    CountExportRules = 0
+End Function
+
 ' Headless core: export learned DELETE rules as server-side Outlook Rules. No UI.
 ' removeExisting: True (default) removes previous "VBA Filter Export" rules first.
-' Rollback safety: after a failed Create nothing is removed; after a failed
-' configure, the new rule is removed BY NAME (never positional Remove, which
-' could delete an unrelated pre-existing rule).
+' Senders and subjects are both exported in rules of up to 50 values; a batch
+' that fails is retried one value per rule, so one bad value costs only itself.
+' Every run appends one record to rule_sync.log (see WriteRuleSyncRecord).
 Public Function ExportLearnedRulesToServerCore(Optional ByVal removeExisting As Boolean = True) As String
     Dim colRules As Object          ' Outlook.Rules
-    Dim newRule As Object           ' Outlook.Rule
     Dim deleteSenders As Collection
+    Dim cleanSubjects As Collection
+    Dim rawSenders As Collection
     Dim subjectKeys As Collection
-    Dim senderCount As Long
-    Dim subjectCount As Long
+    Dim cleanSender As String
+    Dim cleanSubj As String
+    Dim existingCount As Long
     Dim senderRuleCount As Long
     Dim subjectRuleCount As Long
-    Dim existingCount As Long
+    Dim skippedCount As Long
     Dim i As Long
     Dim j As Long
-    Dim batchStart As Long
-    Dim batchEnd As Long
-    Dim batchSize As Long
-    Dim totalBatches As Long
-    Dim batchNum As Long
-    Dim ruleName As String
-    Dim idx As Long
-    Dim subjectSkipped As Long
-    Dim cleanSubjects As Collection
-    Dim rawSubj As String
-    Dim cleanSubj As String
-    Dim rawSenders As Collection
-    Dim cleanSender As String
-    Dim senderSkipped As Long
-    Dim varArray() As Variant
-    Dim createFailed As Boolean
+    Dim stepName As String
+    Dim status As String
+    Dim detail As String
     Dim failNum As Long
     Dim failDesc As String
 
     On Error GoTo PROC_ERR
     PushCallStack "BatchFilter.ExportLearnedRulesToServerCore"
+    status = "NOOP"
 
     ' --- Step 1: Load caches and collect DELETE rules ---
+    stepName = "load"
     If Not RuntimeEnableSelfImproving Then
+        detail = "self-improving filter is disabled"
         ExportLearnedRulesToServerCore = "ERROR: self-improving filter is disabled (set EnableSelfImproving=True in settings.ini)"
         GoTo PROC_EXIT
     End If
 
     LoadLearnedSenders
     LoadLearnedSubjects
-
-    Set subjectKeys = GetLearnedSubjectKeys()
 
     ' Sanitize sender list
     Set rawSenders = GetLearnedDeleteSenders()
@@ -2381,103 +2381,15 @@ Public Function ExportLearnedRulesToServerCore(Optional ByVal removeExisting As 
         If Len(cleanSender) > 0 And InStr(1, cleanSender, "@") > 0 Then
             deleteSenders.Add cleanSender
         Else
-            If Len(cleanSender) > 0 Then
-                LogMessage "WARN", "ExportLearnedRulesToServer: skipped invalid sender: """ & cleanSender & """"
-            Else
-                LogMessage "WARN", "ExportLearnedRulesToServer: skipped empty sender entry"
-            End If
+            LogMessage "WARN", "ExportLearnedRulesToServer: skipped invalid sender: """ & cleanSender & """"
         End If
     Next j
 
-    senderCount = deleteSenders.Count
-    subjectCount = subjectKeys.Count
-
-    If senderCount = 0 And subjectCount = 0 Then
-        ExportLearnedRulesToServerCore = "No learned DELETE rules to export. Nothing created."
-        GoTo PROC_EXIT
-    End If
-
-    ' --- Step 2: Get server rules; optionally remove existing exports ---
-    Set colRules = Application.Session.DefaultStore.GetRules()
-
-    existingCount = 0
-    For i = colRules.Count To 1 Step -1
-        If Left(colRules.Item(i).Name, 18) = "VBA Filter Export " Then
-            existingCount = existingCount + 1
-            If removeExisting Then colRules.Remove i
-        End If
-    Next i
-
-    If removeExisting And existingCount > 0 Then
-        LogMessage "INFO", "Removed " & existingCount & " existing VBA Filter Export rules"
-    End If
-
-    senderRuleCount = 0
-    subjectRuleCount = 0
-
-    ' --- Step 3: Create sender rules (batches of 50) ---
-    senderSkipped = 0
-
-    If senderCount > 0 Then
-        batchSize = 50
-        totalBatches = Int((senderCount - 1) / batchSize) + 1
-
-        For batchNum = 1 To totalBatches
-            batchStart = (batchNum - 1) * batchSize + 1
-            batchEnd = batchStart + batchSize - 1
-            If batchEnd > senderCount Then batchEnd = senderCount
-
-            ' Build Variant array for this batch
-            ReDim varArray(0 To batchEnd - batchStart)
-            idx = 0
-            For j = batchStart To batchEnd
-                varArray(idx) = CStr(deleteSenders(j))
-                idx = idx + 1
-            Next j
-
-            ' Create the rule with error handling per batch
-            If totalBatches = 1 Then
-                ruleName = "VBA Filter Export - Senders"
-            Else
-                ruleName = "VBA Filter Export - Senders (" & batchNum & "/" & totalBatches & ")"
-            End If
-
-            On Error Resume Next
-            Err.Clear
-            Set newRule = Nothing
-            Set newRule = colRules.Create(ruleName, 0)  ' 0 = olRuleReceive
-            If Not newRule Is Nothing Then
-                newRule.Conditions.SenderAddress.Address = varArray
-                newRule.Conditions.SenderAddress.Enabled = True
-                newRule.Actions.Delete.Enabled = True
-                newRule.Enabled = True
-            End If
-            createFailed = (Err.Number <> 0) Or (newRule Is Nothing)
-            failNum = Err.Number
-            failDesc = Err.Description
-            On Error GoTo PROC_ERR
-
-            If createFailed Then
-                LogMessage "WARN", "Sender batch " & batchNum & " FAILED: Error " & failNum & ": " & failDesc
-                senderSkipped = senderSkipped + (batchEnd - batchStart + 1)
-                ' Roll back ONLY if Create actually added a rule; remove it by name.
-                ' Never call Remove when Create itself failed (newRule Is Nothing).
-                If Not newRule Is Nothing Then
-                    RemoveRuleByName colRules, ruleName
-                End If
-            Else
-                senderRuleCount = senderRuleCount + 1
-                LogMessage "INFO", "Created rule: " & ruleName & " (" & (batchEnd - batchStart + 1) & " senders)"
-            End If
-        Next batchNum
-    End If
-
-    ' --- Step 4: Sanitize subject keys ---
+    ' Sanitize subject keys
+    Set subjectKeys = GetLearnedSubjectKeys()
     Set cleanSubjects = New Collection
     For j = 1 To subjectKeys.Count
-        rawSubj = subjectKeys(j)
-        cleanSubj = rawSubj
-        cleanSubj = Replace(cleanSubj, vbCrLf, " ")
+        cleanSubj = CStr(subjectKeys(j))
         cleanSubj = Replace(cleanSubj, vbCr, " ")
         cleanSubj = Replace(cleanSubj, vbLf, " ")
         cleanSubj = Replace(cleanSubj, vbTab, " ")
@@ -2492,59 +2404,36 @@ Public Function ExportLearnedRulesToServerCore(Optional ByVal removeExisting As 
         End If
     Next j
 
-    subjectCount = cleanSubjects.Count
-
-    ' --- Step 5: Create subject rules (one per subject for robustness) ---
-    subjectSkipped = 0
-
-    If subjectCount > 0 Then
-        For j = 1 To subjectCount
-            ruleName = "VBA Filter Export - Subject " & j
-
-            On Error Resume Next
-            Err.Clear
-            Set newRule = Nothing
-            Set newRule = colRules.Create(ruleName, 0)
-            If Not newRule Is Nothing Then
-                newRule.Conditions.subject.text = Array(cleanSubjects(j))
-                newRule.Conditions.subject.Enabled = True
-                newRule.Actions.Delete.Enabled = True
-                newRule.Enabled = True
-            End If
-            createFailed = (Err.Number <> 0) Or (newRule Is Nothing)
-            failNum = Err.Number
-            failDesc = Err.Description
-
-            If createFailed And Not newRule Is Nothing Then
-                ' Fallback: try SubjectOrBody on the same (already created) rule
-                LogMessage "WARN", "Subject rule FAILED (Subject.Text): """ & Left(cleanSubjects(j), 60) & _
-                           """ - Error " & failNum & ": " & failDesc
-                Err.Clear
-                newRule.Conditions.SubjectOrBody.text = Array(cleanSubjects(j))
-                newRule.Conditions.SubjectOrBody.Enabled = True
-                newRule.Actions.Delete.Enabled = True
-                newRule.Enabled = True
-                createFailed = (Err.Number <> 0)
-                failNum = Err.Number
-                failDesc = Err.Description
-            End If
-            On Error GoTo PROC_ERR
-
-            If createFailed Then
-                LogMessage "WARN", "Subject rule FAILED: """ & Left(cleanSubjects(j), 60) & _
-                           """ - Error " & failNum & ": " & failDesc
-                subjectSkipped = subjectSkipped + 1
-                ' Roll back ONLY if Create actually added a rule; remove it by name.
-                If Not newRule Is Nothing Then
-                    RemoveRuleByName colRules, ruleName
-                End If
-            Else
-                subjectRuleCount = subjectRuleCount + 1
-            End If
-        Next j
+    If deleteSenders.Count = 0 And cleanSubjects.Count = 0 Then
+        detail = "no learned DELETE rules"
+        ExportLearnedRulesToServerCore = "No learned DELETE rules to export. Nothing created."
+        GoTo PROC_EXIT
     End If
 
-    ' --- Step 6: Save all rules to server ---
+    ' --- Step 2: Get server rules; optionally remove existing exports ---
+    ' A rule set that is already in conflict (edited elsewhere, or a broken
+    ' rule left by an earlier export) fails here, before anything is changed.
+    stepName = "read rules"
+    Set colRules = Application.Session.DefaultStore.GetRules()
+
+    stepName = "remove old exports"
+    For i = colRules.Count To 1 Step -1
+        If Left(colRules.Item(i).Name, 18) = "VBA Filter Export " Then
+            existingCount = existingCount + 1
+            If removeExisting Then colRules.Remove i
+        End If
+    Next i
+    If Not removeExisting Then existingCount = 0
+
+    ' --- Step 3: Create rules (batches of 50) ---
+    stepName = "create sender rules"
+    ExportRuleBatches colRules, deleteSenders, True, senderRuleCount, skippedCount
+
+    stepName = "create subject rules"
+    ExportRuleBatches colRules, cleanSubjects, False, subjectRuleCount, skippedCount
+
+    ' --- Step 4: Save all rules to server ---
+    stepName = "save"
     On Error Resume Next
     Err.Clear
     colRules.Save
@@ -2553,32 +2442,148 @@ Public Function ExportLearnedRulesToServerCore(Optional ByVal removeExisting As 
     On Error GoTo PROC_ERR
 
     If failNum <> 0 Then
-        LogMessage "ERROR", "colRules.Save failed: Error " & failNum & ": " & failDesc
-        ExportLearnedRulesToServerCore = "ERROR: rules were created but Save to server failed: " & failDesc & _
-                                         " (sender rules: " & senderRuleCount & ", subject rules: " & subjectRuleCount & _
-                                         "). If the Rules dialog is open, close it and try again."
+        status = "FAILED"
+        detail = "Error " & failNum & ": " & failDesc
+        LogMessage "ERROR", "colRules.Save failed: " & detail
+        ExportLearnedRulesToServerCore = "ERROR: rules were built but Save to server failed: " & failDesc & _
+                                         RulesErrorHint(failDesc) & " Nothing was changed on the server."
         GoTo PROC_EXIT
     End If
 
+    status = "OK"
     LogMessage "INFO", "ExportLearnedRulesToServer complete: " & senderRuleCount & " sender rules, " & _
                subjectRuleCount & " subject rules saved"
 
-    ExportLearnedRulesToServerCore = "Created " & senderRuleCount & " sender rule(s) (" & senderCount & " addresses)" & _
-                                     IIf(senderSkipped > 0, ", " & senderSkipped & " addresses skipped", "") & _
-                                     " and " & subjectRuleCount & " subject rule(s) (" & subjectCount & " keywords)" & _
-                                     IIf(subjectSkipped > 0, ", " & subjectSkipped & " skipped", "") & "." & _
-                                     IIf(removeExisting And existingCount > 0, _
-                                         " Removed " & existingCount & " previous export rule(s).", "") & _
+    ExportLearnedRulesToServerCore = "Created " & senderRuleCount & " sender rule(s) (" & deleteSenders.Count & " addresses)" & _
+                                     " and " & subjectRuleCount & " subject rule(s) (" & cleanSubjects.Count & " keywords)." & _
+                                     IIf(skippedCount > 0, " Skipped " & skippedCount & " value(s) the server rejected (see error.log).", "") & _
+                                     IIf(existingCount > 0, " Removed " & existingCount & " previous export rule(s).", "") & _
                                      " Verify in: Home -> Rules -> Manage Rules & Alerts."
 
 PROC_EXIT:
+    WriteRuleSyncRecord status, stepName, existingCount, senderRuleCount, subjectRuleCount, skippedCount, detail
     PopCallStack
     Exit Function
 PROC_ERR:
-    LogError "BatchFilter", "ExportLearnedRulesToServerCore", Err.Number, Err.Description
-    ExportLearnedRulesToServerCore = "ERROR: " & Err.Description
+    status = "FAILED"
+    detail = "Error " & Err.Number & ": " & Err.Description
+    LogError "BatchFilter", "ExportLearnedRulesToServerCore", Err.Number, Err.Description, "step=" & stepName
+    ExportLearnedRulesToServerCore = "ERROR: failed at step '" & stepName & "': " & Err.Description & RulesErrorHint(Err.Description)
     Resume PROC_EXIT
 End Function
+
+' Create DELETE rules for values in chunks of 50 (one condition array per
+' rule). A chunk the server rejects is retried one value per rule.
+Private Sub ExportRuleBatches(ByVal colRules As Object, ByVal values As Collection, ByVal bySender As Boolean, _
+                              ByRef ruleCount As Long, ByRef skippedCount As Long)
+    Const BATCH_SIZE As Long = 50
+    Dim label As String
+    Dim ruleName As String
+    Dim batchArray() As Variant
+    Dim totalBatches As Long
+    Dim batchNum As Long
+    Dim batchStart As Long
+    Dim batchEnd As Long
+    Dim j As Long
+    Dim failDesc As String
+
+    On Error GoTo PROC_ERR
+    PushCallStack "BatchFilter.ExportRuleBatches"
+
+    If values.Count = 0 Then GoTo PROC_EXIT
+    label = IIf(bySender, "Senders", "Subjects")
+    totalBatches = Int((values.Count - 1) / BATCH_SIZE) + 1
+
+    For batchNum = 1 To totalBatches
+        batchStart = (batchNum - 1) * BATCH_SIZE + 1
+        batchEnd = batchStart + BATCH_SIZE - 1
+        If batchEnd > values.Count Then batchEnd = values.Count
+
+        ReDim batchArray(0 To batchEnd - batchStart)
+        For j = batchStart To batchEnd
+            batchArray(j - batchStart) = CStr(values(j))
+        Next j
+
+        ruleName = "VBA Filter Export - " & label & " (" & batchNum & "/" & totalBatches & ")"
+        If CreateDeleteRule(colRules, ruleName, bySender, batchArray, failDesc) Then
+            ruleCount = ruleCount + 1
+            LogMessage "INFO", "Created rule: " & ruleName & " (" & (batchEnd - batchStart + 1) & " values)"
+        Else
+            LogMessage "WARN", "Rule " & ruleName & " FAILED (" & failDesc & "); retrying one value per rule"
+            For j = batchStart To batchEnd
+                ruleName = "VBA Filter Export - " & label & " #" & j
+                If CreateDeleteRule(colRules, ruleName, bySender, Array(CStr(values(j))), failDesc) Then
+                    ruleCount = ruleCount + 1
+                Else
+                    skippedCount = skippedCount + 1
+                    LogMessage "WARN", "Skipped " & label & " value """ & Left(CStr(values(j)), 60) & """: " & failDesc
+                End If
+            Next j
+        End If
+    Next batchNum
+
+PROC_EXIT:
+    PopCallStack
+    Exit Sub
+PROC_ERR:
+    LogError "BatchFilter", "ExportRuleBatches", Err.Number, Err.Description
+    Resume PROC_EXIT
+End Sub
+
+' Create one enabled receive rule that deletes mail matching any of values
+' (sender addresses or subject substrings). On failure, removes the
+' half-built rule by name and returns False with failDesc set.
+Private Function CreateDeleteRule(ByVal colRules As Object, ByVal ruleName As String, ByVal bySender As Boolean, _
+                                  ByVal values As Variant, ByRef failDesc As String) As Boolean
+    Dim newRule As Object           ' Outlook.Rule
+
+    On Error Resume Next
+    Set newRule = colRules.Create(ruleName, 0)  ' 0 = olRuleReceive
+    If Not newRule Is Nothing Then
+        If bySender Then
+            newRule.Conditions.SenderAddress.Address = values
+            newRule.Conditions.SenderAddress.Enabled = True
+        Else
+            newRule.Conditions.subject.text = values
+            newRule.Conditions.subject.Enabled = True
+        End If
+        newRule.Actions.Delete.Enabled = True
+        newRule.Enabled = True
+    End If
+
+    If Err.Number = 0 And Not newRule Is Nothing Then
+        CreateDeleteRule = True
+    Else
+        failDesc = "Error " & Err.Number & ": " & Err.Description
+        ' Roll back only a rule Create actually added, by name (never positional)
+        If Not newRule Is Nothing Then RemoveRuleByName colRules, ruleName
+    End If
+End Function
+
+' Actionable next step for a server-rules error, or "" if none is known.
+Private Function RulesErrorHint(ByVal errDesc As String) As String
+    If InStr(1, errDesc, "conflict", vbTextCompare) > 0 Then
+        RulesErrorHint = " Your server rules are in conflict. Open Home -> Rules -> Manage Rules & Alerts," & _
+                         " keep the server copy if asked, delete any rule marked in red, then export again."
+    ElseIf InStr(1, errDesc, "quota", vbTextCompare) > 0 Or InStr(1, errDesc, "too large", vbTextCompare) > 0 Then
+        RulesErrorHint = " The server rules quota is full. Remove unused rules in Manage Rules & Alerts, then export again."
+    Else
+        RulesErrorHint = " If the Rules dialog is open, close it and try again."
+    End If
+End Function
+
+' Append one line per export run to rule_sync.log:
+' timestamp|status|step|removed|sender_rules|subject_rules|skipped|detail
+' status: OK, FAILED or NOOP; step: where the run ended (for FAILED, where it broke).
+Private Sub WriteRuleSyncRecord(ByVal status As String, ByVal stepName As String, ByVal removedCount As Long, _
+                                ByVal senderRules As Long, ByVal subjectRules As Long, ByVal skippedCount As Long, _
+                                ByVal detail As String)
+    On Error Resume Next   ' observability must never break the export itself
+    AppendLineUTF8 Environ("APPDATA") & "\" & LEARNED_DATA_FOLDER & "\" & RULE_SYNC_LOG_FILE, _
+                   Format(Now, "yyyy-mm-dd hh:nn:ss") & "|" & status & "|" & stepName & "|" & _
+                   removedCount & "|" & senderRules & "|" & subjectRules & "|" & skippedCount & "|" & _
+                   Replace(Replace(detail, "|", " "), vbCrLf, " ")
+End Sub
 
 '-------------------------------------------------------------------------------
 ' FOLDER MIGRATION (v1.x -> v2.0)

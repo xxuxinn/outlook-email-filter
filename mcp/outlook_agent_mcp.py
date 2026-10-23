@@ -514,6 +514,33 @@ def get_error_log(n: int = 50) -> str:
     )
 
 
+@mcp.tool()
+def get_rule_sync_log(n: int = 20) -> str:
+    """Show the last N server-rule exports (default 20): did each sync work, and if not, where it broke.
+
+    Reads <data_dir>/rule_sync.log — one line per ExportLearnedRulesToServer
+    run: ``timestamp|status|step|removed|sender_rules|subject_rules|skipped|detail``.
+    status is OK, FAILED or NOOP; for FAILED, step names where the export
+    broke (e.g. "read rules" means the server rules were already in conflict).
+    Read-only; works without Outlook.
+    """
+    if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= MAX_LOG_LINES:
+        return f"ERROR: n must be an integer between 1 and {MAX_LOG_LINES} (got {n!r})."
+
+    path = get_data_dir() / "rule_sync.log"
+    if not path.is_file():
+        return f"No rule sync log found ({path}) — no server rule exports recorded yet."
+    lines = [ln for ln in read_text_fallback(path).splitlines() if ln.strip()][-n:]
+    header = f"{'timestamp':<20} {'status':<7} {'step':<21} removed sender subject skipped  detail"
+    rows = []
+    for line in lines:
+        f = (line.split("|", 7) + [""] * 8)[:8]
+        rows.append(
+            f"{f[0][:19]:<20} {f[1][:6]:<7} {f[2][:20]:<21} {f[3]:>7} {f[4]:>6} {f[5]:>7} {f[6]:>7}  {f[7]}"
+        )
+    return "\n".join([header, *rows])
+
+
 # ---------------------------------------------------------------------------
 # Write-backed tools (mutating, with care)
 # ---------------------------------------------------------------------------
