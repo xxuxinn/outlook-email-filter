@@ -1,3 +1,4 @@
+Attribute VB_Name = "BatchFilter"
 '===============================================================================
 ' BatchFilter.bas - Batch Processing Functions v3.0
 '===============================================================================
@@ -2779,7 +2780,7 @@ End Sub
 
 ' Headless core: build the full version/status text. No UI.
 ' The bridge (Bridge.bas DispatchMacroStd, case "ShowVersionInfo") calls this
-' directly — it is the single version-info implementation.
+' directly - it is the single version-info implementation.
 Public Function ShowVersionInfoCore() As String
     Dim info As String
 

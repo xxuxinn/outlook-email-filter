@@ -1,3 +1,4 @@
+Attribute VB_Name = "EmailDigest"
 '===============================================================================
 ' EmailDigest.bas - Daily Triage Digest + Rule Mining v3.1
 '===============================================================================
@@ -13,7 +14,7 @@
 ' ProposeRulesCore:
 '   Mines decision_log.txt + the Review folder for repeat offenders and asks
 '   the LLM to propose new sender/subject rules. Proposals are written to
-'   rule_proposals.txt as PENDING — a human approves or rejects each in the
+'   rule_proposals.txt as PENDING - a human approves or rejects each in the
 '   Web UI before anything becomes a live rule.
 '
 ' Scheduling: Bridge.CheckScheduledJobs runs the digest daily after
@@ -67,7 +68,7 @@ End Function
 ' DAILY DIGEST
 '-------------------------------------------------------------------------------
 
-' Interactive wrapper — run from QAT or the VBA editor
+' Interactive wrapper - run from QAT or the VBA editor
 Public Sub GenerateDailyDigest()
     Dim result As String
     result = GenerateDailyDigestCore()
@@ -87,7 +88,7 @@ Public Function GenerateDailyDigestCore() As String
     itemCount = CollectRecentEmails(items, inboxCount, reviewCount)
 
     If itemCount = 0 Then
-        GenerateDailyDigestCore = "No emails in the last 24 hours — no digest generated."
+        GenerateDailyDigestCore = "No emails in the last 24 hours - no digest generated."
         GoTo PROC_EXIT
     End If
 
@@ -357,13 +358,13 @@ Private Function RenderDigestMarkdown(ByRef items() As DigestItem, ByVal itemCou
     PushCallStack "EmailDigest.RenderDigestMarkdown"
 
     Dim md As String
-    md = "# Daily Email Digest — " & Format(Date, "yyyy-mm-dd") & vbCrLf & vbCrLf
+    md = "# Daily Email Digest - " & Format(Date, "yyyy-mm-dd") & vbCrLf & vbCrLf
     md = md & "Generated " & Format(Now, "yyyy-mm-dd hh:nn") & ". " & _
          itemCount & " email(s) in the last 24 h (Inbox: " & inboxCount & _
          ", " & RuntimeFolderReview & ": " & reviewCount & ")." & vbCrLf & vbCrLf
 
     If Not llmUsed Then
-        md = md & "> LLM summaries unavailable — enable UseLLMAPI in settings for ranked triage." & vbCrLf & vbCrLf
+        md = md & "> LLM summaries unavailable - enable UseLLMAPI in settings for ranked triage." & vbCrLf & vbCrLf
         md = md & "## All emails" & vbCrLf & vbCrLf
         md = md & RenderItemLines(items, itemCount, -1, 99, False)
     Else
@@ -436,7 +437,7 @@ Private Function RenderItemLines(ByRef items() As DigestItem, ByVal itemCount As
                     End If
                 Next j
 
-                out = out & "- **" & items(i).senderName & "** — " & items(i).subject
+                out = out & "- **" & items(i).senderName & "** - " & items(i).subject
                 If threadCount > 1 Then out = out & " *(" & threadCount & " messages in thread)*"
                 out = out & vbCrLf
                 If withSummary And Len(items(i).summary) > 0 Then
@@ -558,7 +559,7 @@ Private Function CreateDeadlineTasks(ByRef items() As DigestItem, ByVal itemCoun
                 task.Body = "From: " & items(i).senderName & " <" & items(i).senderEmail & ">" & vbCrLf & _
                             "Subject: " & items(i).subject & vbCrLf & _
                             "Summary: " & items(i).summary & vbCrLf & vbCrLf & _
-                            "(Created by the Email Agent daily digest — deadline extracted by LLM, verify before relying on it.)"
+                            "(Created by the Email Agent daily digest - deadline extracted by LLM, verify before relying on it.)"
                 task.Save
                 created = created + 1
                 Set task = Nothing
@@ -603,14 +604,14 @@ Private Function SendDigestEmail(ByVal digestMarkdown As String) As Boolean
 
     Dim item As Outlook.MailItem
     Set item = Application.CreateItem(olMailItem)
-    item.subject = "Daily Email Digest — " & Format(Date, "yyyy-mm-dd")
+    item.subject = "Daily Email Digest - " & Format(Date, "yyyy-mm-dd")
     item.Body = digestMarkdown
     item.Recipients.Add Application.Session.CurrentUser.Name
     If item.Recipients.ResolveAll Then
         item.Send
         SendDigestEmail = True
     Else
-        ' Could not resolve own address — leave as draft instead of failing
+        ' Could not resolve own address - leave as draft instead of failing
         item.Save
         LogMessage "WARN", "SendDigestEmail: could not resolve own address; digest saved to Drafts"
     End If
@@ -652,7 +653,7 @@ Public Function ProposeRulesCore() As String
     evidence = BuildMiningEvidence()
 
     If Len(evidence) = 0 Then
-        ProposeRulesCore = "No mining evidence yet — the Review folder is empty and the decision log has no recent activity."
+        ProposeRulesCore = "No mining evidence yet - the Review folder is empty and the decision log has no recent activity."
         GoTo PROC_EXIT
     End If
 
@@ -660,7 +661,7 @@ Public Function ProposeRulesCore() As String
     systemPrompt = "You mine email-filtering rules for a professor's mailbox. Given evidence about repeat senders " & _
                    "and subjects, propose up to 8 NEW rules. Be conservative: only propose a rule when the pattern " & _
                    "is clearly junk (DELETE) or clearly important (KEEP). Subject values must be distinctive multi-word " & _
-                   "phrases (never a single common word — rules match by substring). Respond with EXACTLY one JSON " & _
+                   "phrases (never a single common word - rules match by substring). Respond with EXACTLY one JSON " & _
                    "object per line, no other text: " & _
                    "{""type"":""SENDER"" or ""SUBJECT"",""value"":""email address or subject phrase""," & _
                    """action"":""KEEP"" or ""DELETE"",""reason"":""max 15 words""}" & _
@@ -889,7 +890,7 @@ End Function
 ' Low 7 hex digits of seconds-since-2020 + a rolling counter nibble. The
 ' seconds value outgrows 7 hex digits in mid-2028; after that the top digit
 ' is dropped, so ids can only collide with ones minted a full 8.5-year epoch
-' earlier — acceptable for a human-reviewed proposals queue.
+' earlier - acceptable for a human-reviewed proposals queue.
 Private Function GenerateProposalId() As String
     Dim seconds As Long
     seconds = DateDiff("s", DateSerial(2020, 1, 1), Now)

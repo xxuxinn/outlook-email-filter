@@ -58,7 +58,7 @@ In the Project Explorer (left panel), right-click each of these modules and choo
 ### Step 4: Import Updated Modules
 
 - Go to **File → Import File** (or press **Ctrl+M**)
-- Navigate to the `src/` folder in the project directory
+- Navigate to the `src/` folder in the project directory (a git checkout gives the `.bas` files Windows line endings via `.gitattributes`; each file names its own module, so it never imports as `Module1`)
 - Import each `.bas` file you removed in Step 3:
   - `src/Config.bas`
   - `src/Utilities.bas`

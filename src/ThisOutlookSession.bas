@@ -135,12 +135,12 @@ End Sub
 ' NEW MAIL EVENT HANDLER
 '-------------------------------------------------------------------------------
 
-' Fires when a new email arrives in the Inbox — real-time filtering.
+' Fires when a new email arrives in the Inbox - real-time filtering.
 ' v3.1: routes through ExecuteAction, so ambiguous emails now get the SAME
 ' LLM classification as batch runs (previously they went straight to Review
 ' without ever consulting the LLM), and every decision lands in
 ' decision_log.txt. Auto-reply drafting triggers on resolved KEEPs when
-' RuntimeAutoReplyOnArrival = True (drafts only — never auto-sent).
+' RuntimeAutoReplyOnArrival = True (drafts only - never auto-sent).
 Private Sub inboxItems_ItemAdd(ByVal Item As Object)
     On Error GoTo ErrorHandler
 
@@ -310,7 +310,7 @@ Private Sub learnReplyItems_ItemAdd(ByVal Item As Object)
     Loop
     originalSubject = trimmedSubject
 
-    ' Extract reply body / original snippet (shared helpers in EmailAgent.bas —
+    ' Extract reply body / original snippet (shared helpers in EmailAgent.bas -
     ' the previous local copies drifted from the EmailAgent versions)
     Dim myReplyText As String
     myReplyText = ExtractReplyTextFromBody(mail.Body)

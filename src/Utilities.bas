@@ -1,3 +1,4 @@
+Attribute VB_Name = "Utilities"
 '===============================================================================
 ' Utilities.bas - Helper Functions for Email Agent v3.1
 '===============================================================================
@@ -104,7 +105,7 @@ Public Sub LogError(ByVal moduleName As String, ByVal procName As String, _
     End If
 End Sub
 
-' NOTE: No error handler here — this is called from LogError/LogMessage,
+' NOTE: No error handler here - this is called from LogError/LogMessage,
 ' so adding LogError would cause infinite recursion. Callers use On Error Resume Next.
 Public Sub WriteToLogFile(ByVal message As String)
     Dim fso As Object
@@ -689,12 +690,19 @@ Public Function ParseJSONContent(ByVal jsonText As String) As String
     ParseJSONContent = ExtractJSONStringValue(jsonText, "content")
 End Function
 
+' Default subject DELETE patterns. The leading Chinese "discount" pattern
+' (U+512A U+60E0) is built with ChrW so every .bas file stays ASCII-only:
+' the VBA Editor imports .bas files in the ANSI code page and would garble it.
+Public Function DefaultDeleteSubjectPatterns() As String
+    DefaultDeleteSubjectPatterns = ChrW(&H512A) & ChrW(&H60E0) & "," & DEFAULT_DELETE_SUBJECT_PATTERNS
+End Function
+
 '-------------------------------------------------------------------------------
 ' UTF-8 FILE I/O HELPERS (v3.1)
 '-------------------------------------------------------------------------------
 ' settings.ini and all learned data files are UTF-8 with BOM as of v3.1 so the
-' Python Web UI / MCP server and VBA agree on encoding (Chinese patterns like
-' 優惠 previously corrupted across the ANSI/UTF-8 boundary).
+' Python Web UI / MCP server and VBA agree on encoding (Chinese patterns such as
+' the "discount" pattern previously corrupted across the ANSI/UTF-8 boundary).
 ' Legacy ANSI files are detected by missing BOM and migrated on first write.
 
 ' Read an entire text file. If it starts with a UTF-8 BOM, read as UTF-8;
@@ -782,7 +790,7 @@ PROC_ERR:
     Resume PROC_EXIT
 End Sub
 
-' Append one line to a UTF-8 file as a TRUE append (binary Put at EOF — no
+' Append one line to a UTF-8 file as a TRUE append (binary Put at EOF - no
 ' full-file read/rewrite, so a crash mid-write cannot destroy existing data
 ' and the cost stays O(line), not O(file)). If the file exists without a BOM
 ' (legacy ANSI), it is migrated to UTF-8 once; new/empty files get a BOM so
@@ -1232,7 +1240,7 @@ Public Sub LoadAllSettings()
     RuntimeVIPKeywords = ReadINISetting("Patterns", "VIPSubjectKeywords", DEFAULT_VIP_SUBJECT_KEYWORDS)
     RuntimeDeleteSenderPatterns = ReadINISetting("Patterns", "DeleteSenderPatterns", DEFAULT_DELETE_SENDER_PATTERNS)
     RuntimeDeleteKnownSenders = ReadINISetting("Patterns", "DeleteKnownSenders", DEFAULT_DELETE_KNOWN_SENDERS)
-    RuntimeDeleteSubjectPatterns = ReadINISetting("Patterns", "DeleteSubjectPatterns", DEFAULT_DELETE_SUBJECT_PATTERNS)
+    RuntimeDeleteSubjectPatterns = ReadINISetting("Patterns", "DeleteSubjectPatterns", DefaultDeleteSubjectPatterns())
 
     ' --- LLM ---
     RuntimeUseLLM = ReadINIBool("LLM", "UseLLMAPI", DEFAULT_USE_LLM_API)
@@ -1335,7 +1343,7 @@ Public Sub CreateDefaultSettingsFile()
     s = s & "VIPSubjectKeywords=" & DEFAULT_VIP_SUBJECT_KEYWORDS & vbCrLf
     s = s & "DeleteSenderPatterns=" & DEFAULT_DELETE_SENDER_PATTERNS & vbCrLf
     s = s & "DeleteKnownSenders=" & DEFAULT_DELETE_KNOWN_SENDERS & vbCrLf
-    s = s & "DeleteSubjectPatterns=" & DEFAULT_DELETE_SUBJECT_PATTERNS & vbCrLf
+    s = s & "DeleteSubjectPatterns=" & DefaultDeleteSubjectPatterns() & vbCrLf
     s = s & vbCrLf
     s = s & "[LLM]" & vbCrLf
     s = s & "UseLLMAPI=" & IIf(DEFAULT_USE_LLM_API, "True", "False") & vbCrLf
@@ -1494,7 +1502,7 @@ End Function
 
 ' Read a double value from the INI file.
 ' Values are written with "." decimal (FormatNumberForINI), so parse with the
-' locale-invariant Val() instead of CDbl — on a comma-decimal locale
+' locale-invariant Val() instead of CDbl - on a comma-decimal locale
 ' CDbl("0.60") returns 60 and would break ConfidenceThreshold/Temperature.
 Public Function ReadINIDouble(ByVal section As String, ByVal key As String, ByVal defaultValue As Double) As Double
     Dim raw As String
@@ -1506,7 +1514,7 @@ Public Function ReadINIDouble(ByVal section As String, ByVal key As String, ByVa
     End If
 
     ' Val is locale-invariant (always treats "." as the decimal separator)
-    ' but returns 0 for non-numeric text — verify the first char is number-like
+    ' but returns 0 for non-numeric text - verify the first char is number-like
     If InStr(1, "0123456789.-+", Left(raw, 1)) > 0 Then
         ReadINIDouble = Val(raw)
     Else
@@ -1537,7 +1545,7 @@ Public Sub WriteINISetting(ByVal section As String, ByVal key As String, ByVal v
     Set fso = CreateObject("Scripting.FileSystemObject")
     Set allLines = New Collection
 
-    ' Strip CR/LF from the value — a value containing a newline would inject
+    ' Strip CR/LF from the value - a value containing a newline would inject
     ' arbitrary lines (even new sections) into the INI structure
     value = Replace(Replace(value, vbCr, " "), vbLf, " ")
 
@@ -1757,7 +1765,7 @@ Public Sub RecordLearnedSender(ByVal email As String, ByVal action As String)
     lowerEmail = LCase(Trim(email))
 
     ' Skip @-less addresses (unresolved Exchange /O=... DN). A rule keyed to a
-    ' DN only matches when SMTP resolution fails again — an intermittent,
+    ' DN only matches when SMTP resolution fails again - an intermittent,
     ' confusing rule. The import macros already skip these; now writes do too.
     If InStr(1, lowerEmail, "@") = 0 Then
         LogMessage "WARN", "RecordLearnedSender: skipped non-SMTP address (unresolved Exchange?): " & lowerEmail
@@ -1882,7 +1890,7 @@ Public Function GetLearnedSendersCount() As Long
     End If
 End Function
 
-' Force reload learned senders from file — headless core (no dialogs)
+' Force reload learned senders from file - headless core (no dialogs)
 Public Function ReloadLearnedSendersCore() As String
     LoadLearnedSenders True  ' forceReload = True
     LoadLearnedSubjects True

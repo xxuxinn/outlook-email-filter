@@ -1,0 +1,2 @@
+# VBA sources must reach the VBA Editor with Windows line endings
+*.bas text eol=crlf

@@ -1,3 +1,4 @@
+Attribute VB_Name = "Config"
 '===============================================================================
 ' Config.bas - Configuration Module for Email Agent v3.1
 '===============================================================================
@@ -168,7 +169,8 @@ Public Const DEFAULT_FOLDER_LEARN_SUBJECT_DELETE As String = "LearnSubjectDelete
 Public Const DEFAULT_PROTECTED_DOMAINS As String = "substack.com,reddit.com,redditmail.com"
 Public Const DEFAULT_DELETE_SENDER_PATTERNS As String = "notice,noreply,notification,no-reply,marketing,promo,newsletter,digest,campaign,bulk,mailer,broadcast"
 Public Const DEFAULT_DELETE_KNOWN_SENDERS As String = "LinkedIn Job Alerts,edX,Cathay Pacific,HKBN,MyLink,WIRED Daily,Coursera,Udemy,Medium Daily Digest,Twitter,Facebook,Instagram,TikTok"
-Public Const DEFAULT_DELETE_SUBJECT_PATTERNS As String = "優惠,offer,digest,newsletter,unsubscribe,job alert,weekly roundup,daily digest,promotional,special offer,limited time,act now,don't miss"
+' Utilities.DefaultDeleteSubjectPatterns() prepends the Chinese "discount" pattern (kept out of this ASCII-only file)
+Public Const DEFAULT_DELETE_SUBJECT_PATTERNS As String = "offer,digest,newsletter,unsubscribe,job alert,weekly roundup,daily digest,promotional,special offer,limited time,act now,don't miss"
 Public Const DEFAULT_NAME_PATTERNS As String = "Xu Xin,XuXin,Xuxin,Xin Xu,Professor Xu,Prof. Xu,Prof Xu,Dr. Xu,Dr Xu,Mr. Xu,Mr Xu"
 Public Const DEFAULT_GREETING_PATTERNS As String = "Dear Professor Xu,Dear Prof. Xu,Dear Prof Xu,Dear Dr. Xu,Dear Dr Xu,Dear Xin,Hi Xin,Hello Xin,Dear Head,Dear Director"
 Public Const DEFAULT_POLYU_TAGS As String = "[MM],[HRO],[CUS],ToXX"
