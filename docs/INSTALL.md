@@ -26,7 +26,7 @@ This guide covers fresh install, upgrade from v2.0, and migration to a new PC.
 
 #### Step 1: Import the regular modules
 
-In the VBA Editor, go to **File → Import File...** and import each of these (in order):
+In the VBA Editor, go to **File → Import File...** and import each of these (in order). Each file starts with `Attribute VB_Name = "..."`, so the module gets its proper name; the files are ASCII-only, so the editor's ANSI code page cannot garble them:
 
 | File | Notes |
 |------|-------|

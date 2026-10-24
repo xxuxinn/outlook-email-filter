@@ -41,7 +41,7 @@ A VBA-based email agent for Microsoft Outlook that classifies emails using a pri
 ### Installation
 
 1. **Enable macros**: File → Options → Trust Center → Macro Settings → Enable all macros
-2. **Import VBA modules** (Alt+F11 → File → Import): `Config.bas`, `Utilities.bas`, `AgentMemory.bas`, `EmailFilter.bas`, `EmailAgent.bas`, `EmailDigest.bas`, `BatchFilter.bas`, `Bridge.bas`
+2. **Import VBA modules** (Alt+F11 → File → Import): `Config.bas`, `Utilities.bas`, `AgentMemory.bas`, `EmailFilter.bas`, `EmailAgent.bas`, `EmailDigest.bas`, `BatchFilter.bas`, `Bridge.bas`. The files are ASCII-only with an `Attribute VB_Name` header and check out with Windows line endings (`.gitattributes`), so they import as-is under any Windows code page.
 3. **Paste ThisOutlookSession**: Copy-paste `src/ThisOutlookSession.bas` into the built-in module (see [docs/INSTALL.md](docs/INSTALL.md))
 4. **Compile**: Debug → Compile Project → Ctrl+S
 5. **Restart Outlook** — `settings.ini` is auto-created with defaults

@@ -1,9 +1,10 @@
+Attribute VB_Name = "AgentMemory"
 '===============================================================================
 ' AgentMemory.bas - Agent Decision Memory v3.1
 '===============================================================================
 ' Persistent memory of what the filter decided and why, powering:
 '   - decision_log.txt   : every classification (sender|subject|source|action|confidence)
-'   - Sender history     : "45 of 47 emails from this sender were deleted" —
+'   - Sender history     : "45 of 47 emails from this sender were deleted" -
 '                          injected into LLM classification prompts (the single
 '                          biggest accuracy lever: evidence instead of guessing)
 '   - Replied-to set     : "you have replied to this sender before" from
@@ -61,7 +62,7 @@ Public Sub RecordDecision(ByVal senderEmail As String, ByVal subject As String, 
     safeSubject = SanitizeSubject(Truncate(subject, 80))
     confStr = Replace(Format(confidence, "0.00"), ",", ".")
 
-    ' The log grows with every classified email — rotate to .old at the cap
+    ' The log grows with every classified email - rotate to .old at the cap
     ' (sender stats only parse the most recent MAX_DECISION_LINES anyway)
     RotateFileIfOversize GetDecisionLogPath(), DECISION_LOG_MAX_BYTES
 
@@ -209,7 +210,7 @@ Public Function GetSenderContext(ByVal senderEmail As String, ByVal senderName A
             Dim total As Long
             total = CLng(parts(0)) + CLng(parts(1)) + CLng(parts(2))
             If total > 0 Then
-                context = "Sender history: " & total & " previous email(s) from this sender — " & _
+                context = "Sender history: " & total & " previous email(s) from this sender - " & _
                           parts(0) & " kept, " & parts(1) & " deleted, " & parts(2) & " sent to review."
             End If
         End If
@@ -312,7 +313,7 @@ Public Sub RecordCorrection(ByVal senderEmail As String, ByVal subject As String
         Format(Now, "yyyy-mm-dd hh:nn:ss") & "|" & LCase(Trim(Replace(senderEmail, "|", " "))) & "|" & _
         SanitizeSubject(Truncate(subject, 80)) & "|" & UCase(wrongAction) & "|" & UCase(correctAction)
 
-    LogMessage "INFO", "AgentMemory: correction recorded — LLM said " & wrongAction & _
+    LogMessage "INFO", "AgentMemory: correction recorded - LLM said " & wrongAction & _
                ", user says " & correctAction & " for " & senderEmail
 
 PROC_EXIT:

@@ -1,3 +1,4 @@
+Attribute VB_Name = "Bridge"
 '===============================================================================
 ' Bridge.bas - Web UI / MCP Command Bridge v3.1
 '===============================================================================
@@ -154,7 +155,7 @@ Public Sub PollForCommandsTimer()
     pollerBusy = True
     On Error GoTo PollerExit
 
-    ' Scheduled jobs (daily digest / weekly rule mining) — checked ~every 60 s
+    ' Scheduled jobs (daily digest / weekly rule mining) - checked ~every 60 s
     schedulerTickCounter = schedulerTickCounter + 1
     If schedulerTickCounter >= 30 Then
         schedulerTickCounter = 0
@@ -195,7 +196,7 @@ Public Sub PollForCommandsTimer()
                 Err.Clear
                 If DateDiff("s", file.DateLastModified, Now) > 10 Then
                     fso.MoveFile file.Path, file.Path & ".bad"
-                    ' Only report quarantine if the move actually succeeded —
+                    ' Only report quarantine if the move actually succeeded -
                     ' otherwise the file is still locked and will be retried
                     If Err.Number = 0 Then
                         WriteResultFile cmdId, "error", "Command file unreadable; quarantined as .bad"
@@ -427,7 +428,7 @@ Private Function DispatchMacroStd(ByVal macroName As String, Optional ByVal rawJ
             LoadAllSettings
             LoadLearnedSenders True
             LoadLearnedSubjects True
-            result = "Settings and learned rules reloaded. (Event handlers unchanged — run " & _
+            result = "Settings and learned rules reloaded. (Event handlers unchanged - run " & _
                      "ThisOutlookSession.ReinitializeFilter in the VBA Immediate Window for a full restart.)"
 
         Case "DetectAndMigrateOldFolders"
@@ -462,7 +463,7 @@ End Function
 
 ' Headless rule-list dumps for the bridge (the interactive Show*List macros in
 ' BatchFilter end in MsgBox, which would block the timer callback until someone
-' clicks OK at the desktop — see the no-dialogs rule for dispatched commands).
+' clicks OK at the desktop - see the no-dialogs rule for dispatched commands).
 Private Function BuildLearnedSendersListStd() As String
     On Error GoTo StdErr
     Dim dict As Object
@@ -556,7 +557,7 @@ StdErr:
     CaptureFilterDryRunStd = "ERROR: FilterExistingDryRun failed: " & Err.Description
 End Function
 
-' Bridge-friendly SummarizeSelectedEmail — returns result string instead of MsgBox
+' Bridge-friendly SummarizeSelectedEmail - returns result string instead of MsgBox
 Private Function SummarizeSelectedEmailStd() As String
     On Error GoTo StdErr
     Dim mail As Outlook.MailItem
@@ -608,7 +609,7 @@ StdErr:
     SummarizeSelectedEmailStd = "ERROR: SummarizeSelectedEmail failed: " & Err.Description
 End Function
 
-' Bridge-friendly DraftReplyToSelected — returns result string, saves draft via DraftAutoReply, no MsgBox
+' Bridge-friendly DraftReplyToSelected - returns result string, saves draft via DraftAutoReply, no MsgBox
 Private Function DraftReplyToSelectedStd() As String
     On Error GoTo StdErr
     Dim mail As Outlook.MailItem
@@ -645,7 +646,7 @@ StdErr:
     DraftReplyToSelectedStd = "ERROR: DraftReplyToSelected failed: " & Err.Description
 End Function
 
-' Bridge-friendly DraftReplyForSelected — drafts replies for all selected emails, no MsgBox
+' Bridge-friendly DraftReplyForSelected - drafts replies for all selected emails, no MsgBox
 Private Function DraftReplyForSelectedStd() As String
     On Error GoTo StdErr
     Dim sel As Outlook.Selection

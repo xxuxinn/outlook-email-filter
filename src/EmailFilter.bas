@@ -1,3 +1,4 @@
+Attribute VB_Name = "EmailFilter"
 '===============================================================================
 ' EmailFilter.bas - Main Classification Logic v3.1
 '===============================================================================
@@ -270,7 +271,7 @@ End Function
 ' Records every executed decision to decision_log.txt (source from
 ' lastClassifySource set by ClassifyEmail). resolvedAction (optional out)
 ' receives the final action after LLM_REVIEW resolution: KEEP / DELETE /
-' MOVE_II / REVIEW — callers like the real-time handler use it to trigger
+' MOVE_II / REVIEW - callers like the real-time handler use it to trigger
 ' auto-reply only on resolved KEEPs.
 Public Sub ExecuteAction(ByVal mail As Outlook.MailItem, ByVal decision As String, _
                          Optional ByVal stats As Object = Nothing, _
@@ -497,7 +498,7 @@ Public Function ClassifyViaLLMEx(ByVal mail As Outlook.MailItem) As String
         lastLLMCategory = ExtractJSONStringValue(result, "category")
         lastLLMReason = ExtractJSONStringValue(result, "reason")
     Else
-        ' Legacy fallback: model ignored the JSON format — substring match
+        ' Legacy fallback: model ignored the JSON format - substring match
         If InStr(1, UCase(result), "DELETE", vbTextCompare) > 0 Then
             action = "DELETE"
         ElseIf InStr(1, UCase(result), "KEEP", vbTextCompare) > 0 Then
@@ -529,7 +530,7 @@ PROC_ERR:
     Resume PROC_EXIT
 End Function
 
-' Backwards-compatible wrapper — delegates to CallLLM in Utilities.bas.
+' Backwards-compatible wrapper - delegates to CallLLM in Utilities.bas.
 ' Kept so any external macros calling this directly continue to work.
 Public Function CallAzureOpenAICustom(ByVal userPrompt As String, ByVal systemPrompt As String, ByVal maxTokens As Integer) As String
     CallAzureOpenAICustom = CallLLM(userPrompt, systemPrompt, maxTokens)

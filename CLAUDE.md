@@ -155,6 +155,7 @@ See [@docs/macros.md](docs/macros.md) for the full macro reference table.
 
 - No build system — import `.bas` files directly in VBA Editor (Alt+F11). Import ALL of: `Config.bas`, `Utilities.bas`, `AgentMemory.bas`, `EmailFilter.bas`, `EmailAgent.bas`, `EmailDigest.bas`, `BatchFilter.bas`, `Bridge.bas`
 - `ThisOutlookSession.bas` must be copy-pasted into the built-in module, not imported
+- `.bas` files must stay ASCII-only and (except ThisOutlookSession) start with `Attribute VB_Name = "<Module>"`: the VBA Editor imports in the ANSI code page and names modules from that line. Build non-ASCII strings with `ChrW` (see `DefaultDeleteSubjectPatterns`). `.gitattributes` checks them out with CRLF. Enforced by `tests/test_bas_sources.py`
 - Real-time filtering (`inboxItems_ItemAdd`) is enabled by default; disable via `ThisOutlookSession.DisableRealTimeFilter`
 
 ### ⚠️ CRITICAL: Module Update Procedure
@@ -190,7 +191,7 @@ Then run `FilterExistingDryRun` to preview classifications, or `FilterSelectedEm
   - All `/api/*` calls need the `X-Auth-Token` header (token at `%APPDATA%\OutlookEmailFilter\webui_token.txt`, injected into the SPA automatically)
   - Command bridge polls `%APPDATA%\OutlookEmailFilter\commands\` every 2 s (Win32 `SetTimer` in Bridge.bas)
   - Bridge timeout is 120 s in Web UI; result files written as UTF-8 via `ADODB.Stream`
-- Python tests: `webui/tests/` and `mcp/tests/` (pytest; run on any OS with a temp data dir via `OUTLOOK_FILTER_DATA_DIR`)
+- Python tests: `webui/tests/` and `mcp/tests/` (pytest; run on any OS with a temp data dir via `OUTLOOK_FILTER_DATA_DIR`); `tests/` checks the `.bas` sources are importable
 
 ## DO NOT
 

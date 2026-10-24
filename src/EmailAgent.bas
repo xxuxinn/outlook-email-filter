@@ -1,3 +1,4 @@
+Attribute VB_Name = "EmailAgent"
 '===============================================================================
 ' EmailAgent.bas - AI Agent Features v3.0
 '===============================================================================
@@ -83,7 +84,7 @@ PROC_ERR:
 End Sub
 
 ' Bridge variant: takes name/title/role as arguments (no InputBox, no confirm
-' dialog — the Web UI supplies the inputs). Returns a summary or "ERROR: ...".
+' dialog - the Web UI supplies the inputs). Returns a summary or "ERROR: ...".
 Public Function GenerateAddressingPatternsStd(ByVal fullName As String, _
                                               ByVal title As String, _
                                               ByVal role As String) As String
@@ -373,7 +374,7 @@ End Function
 ' SCAN SENT ITEMS FOR REPLY PATTERNS
 '-------------------------------------------------------------------------------
 
-' Interactive wrapper — shows the scan summary in a MsgBox
+' Interactive wrapper - shows the scan summary in a MsgBox
 Public Sub ScanSentForReplyPatterns()
     Dim result As String
     result = ScanSentForReplyPatternsCore()
