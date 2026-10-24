@@ -202,6 +202,7 @@ Public Const LEARNED_REPLIES_FILE As String = "learned_replies.txt"
 Public Const DECISION_LOG_FILE As String = "decision_log.txt"
 Public Const CORRECTIONS_FILE As String = "llm_corrections.txt"
 Public Const PROPOSALS_FILE As String = "rule_proposals.txt"
+Public Const RULE_SYNC_LOG_FILE As String = "rule_sync.log"   ' one line per server rule export
 
 ' Subfolder for daily digest markdown files
 Public Const DIGESTS_SUBFOLDER As String = "digests"
